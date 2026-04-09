@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vercel dev",
-    "build": "tsc --noEmit",
+    "build": "echo 'API-only project: no build output needed'",
     "deploy": "vercel --prod",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

@@ -1,8 +1,3 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": ".",
-  "routes": [
-    { "src": "/api/verify", "dest": "/api/verify.ts" },
-    { "src": "/api/health", "dest": "/api/health.ts" }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json"
 }
