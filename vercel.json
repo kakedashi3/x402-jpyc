@@ -1,0 +1,6 @@
+{
+  "routes": [
+    { "src": "/api/verify", "dest": "/api/verify.ts" },
+    { "src": "/api/health", "dest": "/api/health.ts" }
+  ]
+}
