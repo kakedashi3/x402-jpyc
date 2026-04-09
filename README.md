@@ -112,6 +112,19 @@ npx vercel --prod
 
 See [spec.md](./spec.md) for the full protocol specification.
 
+## Contributing / Discussion
+
+Issues and discussions are welcome.
+
+特に以下について意見を聞かせてください：
+
+- EIP-3009非対応の回避策（Permit2経由の可能性）
+- ガスレス実装のアプローチ
+- マルチチェーン対応（Avalanche等）
+- x402 Foundationへの提案内容
+
+Open an issue: https://github.com/kakedashi3/x402-jpyc/issues
+
 ## License
 
 MIT
