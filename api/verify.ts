@@ -1,5 +1,4 @@
 import {
-  createPublicClient,
   createWalletClient,
   getAddress,
   http,
@@ -126,11 +125,6 @@ export default async function handler(req: Request): Promise<Response> {
   try {
     const account = privateKeyToAccount(privateKey as Hex);
 
-    const publicClient = createPublicClient({
-      chain: polygon,
-      transport: http(rpcUrl),
-    });
-
     const walletClient = createWalletClient({
       account,
       chain: polygon,
@@ -159,15 +153,7 @@ export default async function handler(req: Request): Promise<Response> {
       ],
     });
 
-    const receipt = await publicClient.waitForTransactionReceipt({
-      hash: txHash,
-    });
-
-    if (receipt.status !== "success") {
-      return json({ isValid: false, error: "Transaction reverted" }, 400);
-    }
-
-    return json({ isValid: true, txHash });
+    return json({ isValid: true, txHash, status: "pending" });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return json({ isValid: false, error: message }, 500);
