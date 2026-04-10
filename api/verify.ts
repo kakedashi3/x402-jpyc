@@ -48,6 +48,29 @@ const PERMIT2_ABI = [
   },
 ] as const;
 
+// Module-level initialization
+console.log("[verify] module load", Date.now());
+console.log("[verify] PRIVATE_KEY exists:", !!process.env.FACILITATOR_PRIVATE_KEY);
+console.log("[verify] RPC_URL exists:", !!process.env.POLYGON_RPC_URL);
+
+const _privateKey = process.env.FACILITATOR_PRIVATE_KEY;
+const _rpcUrl = process.env.POLYGON_RPC_URL;
+
+const _key = _privateKey
+  ? ((_privateKey.startsWith("0x") ? _privateKey : `0x${_privateKey}`) as Hex)
+  : null;
+
+console.log("[verify] privateKeyToAccount start", Date.now());
+const _account = _key ? privateKeyToAccount(_key) : null;
+if (_account) console.log("[verify] privateKeyToAccount done", _account.address, Date.now());
+
+const walletClient =
+  _account && _rpcUrl
+    ? createWalletClient({ account: _account, chain: polygon, transport: http(_rpcUrl) })
+    : null;
+
+console.log("[verify] walletClient initialized:", !!walletClient);
+
 interface PermitTransferFrom {
   permitted: {
     token: string;
@@ -80,12 +103,10 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Method not allowed" }, 405);
   }
 
-  const privateKey = process.env.FACILITATOR_PRIVATE_KEY;
-  const rpcUrl = process.env.POLYGON_RPC_URL;
-
-  if (!privateKey || !rpcUrl) {
+  if (!walletClient) {
     return json({ error: "Service not configured" }, 503);
   }
+  const client = walletClient;
 
   let body: VerifyRequest;
   try {
@@ -125,16 +146,8 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   try {
-    const account = privateKeyToAccount(privateKey as Hex);
-
-    const walletClient = createWalletClient({
-      account,
-      chain: polygon,
-      transport: http(rpcUrl),
-    });
-
     console.log("[verify] before writeContract", Date.now());
-    const txHash = await walletClient.writeContract({
+    const txHash = await client.writeContract({
       address: PERMIT2_ADDRESS,
       abi: PERMIT2_ABI,
       functionName: "permitTransferFrom",
@@ -160,6 +173,7 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ isValid: true, txHash, status: "pending" });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.log("[verify] writeContract error", message, Date.now());
     return json({ isValid: false, error: message }, 500);
   }
 }
