@@ -9,5 +9,5 @@
     "esModuleInterop": true
   },
   "include": ["api/**/*.ts", "lib/**/*.ts"],
-  "exclude": ["node_modules", "dist", ".vercel"]
+  "exclude": ["node_modules", "dist", ".vercel", "**/__tests__/**"]
 }

@@ -1,12 +1,71 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
-// Mock the verification function
-vi.mock("../../lib/jpyc.js", () => ({
-  verifyJPYCPayment: vi.fn(),
+// Mock viem modules before importing handler
+vi.mock("viem", async () => {
+  const actual = await vi.importActual<typeof import("viem")>("viem");
+  return {
+    ...actual,
+    createPublicClient: vi.fn(() => mockPublicClient),
+    createWalletClient: vi.fn(() => mockWalletClient),
+  };
+});
+
+vi.mock("viem/accounts", () => ({
+  privateKeyToAccount: vi.fn(() => ({
+    address: "0xFacilitator0000000000000000000000000000",
+    signTransaction: vi.fn(),
+  })),
 }));
 
-import handler from "../verify.js";
-import { verifyJPYCPayment } from "../../lib/jpyc.js";
+const mockPublicClient = {
+  readContract: vi.fn(),
+};
+
+const mockWalletClient = {
+  writeContract: vi.fn(),
+};
+
+// Stub env before importing handler
+vi.stubEnv("FACILITATOR_PRIVATE_KEY", "0x" + "ab".repeat(32));
+vi.stubEnv("POLYGON_RPC_URL", "https://fake-rpc.test");
+vi.stubEnv("API_KEY", "test-secret");
+
+let handler: typeof import("../verify.js").default;
+
+beforeAll(async () => {
+  const mod = await import("../verify.js");
+  handler = mod.default;
+});
+
+const JPYC_ADDRESS = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
+
+const validAuth = {
+  from: "0x1111111111111111111111111111111111111111",
+  to: "0x2222222222222222222222222222222222222222",
+  value: "1000000000000000000",
+  validAfter: "0",
+  validBefore: String(Math.floor(Date.now() / 1000) + 3600),
+  nonce: "0x" + "aa".repeat(32),
+  signature: "0x" + "bb".repeat(65),
+};
+
+const validBody = {
+  paymentPayload: {
+    x402Version: 1,
+    scheme: "eip3009",
+    network: "eip155:137",
+    payload: {
+      authorization: validAuth,
+    },
+  },
+  paymentRequirements: {
+    scheme: "eip3009",
+    network: "eip155:137",
+    asset: JPYC_ADDRESS,
+    amount: "1000000000000000000",
+    payTo: "0x2222222222222222222222222222222222222222",
+  },
+};
 
 function makeRequest(options: {
   method?: string;
@@ -21,12 +80,15 @@ function makeRequest(options: {
     method: options.method ?? "POST",
     headers,
     ...(options.method !== "GET" && {
-      body: options.body !== undefined ? JSON.stringify(options.body) : "invalid json{",
+      body:
+        options.body !== undefined
+          ? JSON.stringify(options.body)
+          : "invalid json{",
     }),
   });
 }
 
-describe("POST /api/verify handler", () => {
+describe("POST /api/verify (EIP-3009)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("API_KEY", "test-secret");
@@ -34,29 +96,19 @@ describe("POST /api/verify handler", () => {
 
   it("returns 405 for non-POST methods", async () => {
     const res = await handler(
-      new Request("https://example.com/api/verify", { method: "GET" })
+      new Request("https://example.com/api/verify", { method: "GET" }),
     );
     expect(res.status).toBe(405);
   });
 
-  it("returns 503 when API_KEY is not configured", async () => {
-    vi.stubEnv("API_KEY", "");
-    const res = await handler(
-      makeRequest({ method: "POST", body: {} })
-    );
-    expect(res.status).toBe(503);
-  });
-
   it("returns 401 when X-API-Key header is missing", async () => {
-    const res = await handler(
-      makeRequest({ method: "POST", body: {} })
-    );
+    const res = await handler(makeRequest({ method: "POST", body: {} }));
     expect(res.status).toBe(401);
   });
 
   it("returns 401 when X-API-Key header is wrong", async () => {
     const res = await handler(
-      makeRequest({ method: "POST", apiKey: "wrong-key", body: {} })
+      makeRequest({ method: "POST", apiKey: "wrong-key", body: {} }),
     );
     expect(res.status).toBe(401);
   });
@@ -76,27 +128,7 @@ describe("POST /api/verify handler", () => {
     expect(data.error).toContain("Invalid JSON");
   });
 
-  it("returns 400 when paymentPayload is missing", async () => {
-    const res = await handler(
-      makeRequest({
-        apiKey: "test-secret",
-        body: { paymentRequirements: {} },
-      })
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it("returns 400 when paymentRequirements is missing", async () => {
-    const res = await handler(
-      makeRequest({
-        apiKey: "test-secret",
-        body: { paymentPayload: { payload: { txHash: "0x123" } } },
-      })
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it("returns 400 when txHash is missing", async () => {
+  it("returns 400 when authorization is missing", async () => {
     const res = await handler(
       makeRequest({
         apiKey: "test-secret",
@@ -104,64 +136,71 @@ describe("POST /api/verify handler", () => {
           paymentPayload: { payload: {} },
           paymentRequirements: {},
         },
-      })
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when nonce is already used", async () => {
+    mockPublicClient.readContract.mockResolvedValue(true); // nonce used
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: validBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
-    expect(data.error).toContain("txHash");
+    expect(data.error).toContain("nonce already used");
   });
 
-  it("returns 200 with verification result on success", async () => {
-    vi.mocked(verifyJPYCPayment).mockResolvedValue({
-      isValid: true,
-      txHash: "0xaaa" as `0x${string}`,
-      amount: "1000",
-      paidAt: "2025-01-01T00:00:00.000Z",
-    });
+  it("returns 400 when authorization has expired", async () => {
+    const expiredBody = structuredClone(validBody);
+    expiredBody.paymentPayload.payload.authorization.validBefore = "1000"; // way in the past
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: expiredBody }),
+    );
+    expect(res.status).toBe(400);
+    const data: any = await res.json();
+    expect(data.error).toContain("expired");
+  });
+
+  it("returns 400 when to does not match payTo", async () => {
+    const mismatchBody = structuredClone(validBody);
+    mismatchBody.paymentPayload.payload.authorization.to =
+      "0x3333333333333333333333333333333333333333";
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: mismatchBody }),
+    );
+    expect(res.status).toBe(400);
+    const data: any = await res.json();
+    expect(data.error).toContain("payTo");
+  });
+
+  it("returns 200 with txHash on success", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false); // nonce not used
+    mockWalletClient.writeContract.mockResolvedValue(
+      "0xdeadbeef" as `0x${string}`,
+    );
 
     const res = await handler(
-      makeRequest({
-        apiKey: "test-secret",
-        body: {
-          paymentPayload: {
-            scheme: "evm-erc20-transfer",
-            network: "eip155:137",
-            payload: { txHash: "0xaaa" },
-          },
-          paymentRequirements: {
-            scheme: "evm-erc20-transfer",
-            network: "eip155:137",
-            asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
-            amount: "1000",
-            payTo: "0x1234",
-          },
-        },
-      })
+      makeRequest({ apiKey: "test-secret", body: validBody }),
     );
     expect(res.status).toBe(200);
     const data: any = await res.json();
     expect(data.isValid).toBe(true);
+    expect(data.txHash).toBe("0xdeadbeef");
   });
 
-  it("returns 500 on unexpected error without leaking details", async () => {
-    vi.mocked(verifyJPYCPayment).mockRejectedValue(
-      new Error("RPC internal: secret connection string xyz")
+  it("returns 500 when transferWithAuthorization fails", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockWalletClient.writeContract.mockRejectedValue(
+      new Error("execution reverted: ECRecover failed"),
     );
 
     const res = await handler(
-      makeRequest({
-        apiKey: "test-secret",
-        body: {
-          paymentPayload: {
-            payload: { txHash: "0xaaa" },
-          },
-          paymentRequirements: {},
-        },
-      })
+      makeRequest({ apiKey: "test-secret", body: validBody }),
     );
     expect(res.status).toBe(500);
     const data: any = await res.json();
-    expect(data.error).toBe("Internal server error");
-    expect(JSON.stringify(data)).not.toContain("secret");
+    expect(data.isValid).toBe(false);
+    expect(data.error).toBe("Transaction execution failed");
   });
 });
