@@ -74,6 +74,8 @@ function json(data: unknown, status = 200): Response {
 }
 
 export default async function handler(req: Request): Promise<Response> {
+  console.log("[verify] start", Date.now());
+
   if (req.method !== "POST") {
     return json({ error: "Method not allowed" }, 405);
   }
@@ -131,6 +133,7 @@ export default async function handler(req: Request): Promise<Response> {
       transport: http(rpcUrl),
     });
 
+    console.log("[verify] before writeContract", Date.now());
     const txHash = await walletClient.writeContract({
       address: PERMIT2_ADDRESS,
       abi: PERMIT2_ABI,
@@ -153,6 +156,7 @@ export default async function handler(req: Request): Promise<Response> {
       ],
     });
 
+    console.log("[verify] after writeContract", txHash, Date.now());
     return json({ isValid: true, txHash, status: "pending" });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
