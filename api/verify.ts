@@ -1,8 +1,74 @@
-import { verifyJPYCPayment, type VerifyRequest } from "../lib/jpyc.js";
+import {
+  createPublicClient,
+  createWalletClient,
+  getAddress,
+  http,
+  type Address,
+  type Hex,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { polygon } from "viem/chains";
 
-export const config = {
-  runtime: "edge",
-};
+const PERMIT2_ADDRESS: Address = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+const JPYC_ADDRESS: Address = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
+
+const PERMIT2_ABI = [
+  {
+    name: "permitTransferFrom",
+    type: "function",
+    inputs: [
+      {
+        name: "permit",
+        type: "tuple",
+        components: [
+          {
+            name: "permitted",
+            type: "tuple",
+            components: [
+              { name: "token", type: "address" },
+              { name: "amount", type: "uint256" },
+            ],
+          },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+        ],
+      },
+      {
+        name: "transferDetails",
+        type: "tuple",
+        components: [
+          { name: "to", type: "address" },
+          { name: "requestedAmount", type: "uint256" },
+        ],
+      },
+      { name: "owner", type: "address" },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
+interface PermitTransferFrom {
+  permitted: {
+    token: string;
+    amount: string;
+  };
+  nonce: string;
+  deadline: string;
+}
+
+interface TransferDetails {
+  to: string;
+  requestedAmount: string;
+}
+
+interface VerifyRequest {
+  permit: PermitTransferFrom;
+  transferDetails: TransferDetails;
+  owner: string;
+  signature: string;
+}
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
@@ -13,14 +79,11 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Method not allowed" }, 405);
   }
 
-  // API key authentication (fail-closed: no key configured = no traffic)
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
+  const privateKey = process.env.FACILITATOR_PRIVATE_KEY;
+  const rpcUrl = process.env.POLYGON_RPC_URL;
+
+  if (!privateKey || !rpcUrl) {
     return json({ error: "Service not configured" }, 503);
-  }
-  const provided = req.headers.get("x-api-key");
-  if (provided !== apiKey) {
-    return json({ error: "Unauthorized" }, 401);
   }
 
   let body: VerifyRequest;
@@ -30,24 +93,83 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  if (!body.paymentPayload || !body.paymentRequirements) {
+  const { permit, transferDetails, owner, signature } = body;
+
+  if (!permit || !transferDetails || !owner || !signature) {
     return json(
-      { error: "Missing required fields: paymentPayload, paymentRequirements" },
+      {
+        error:
+          "Missing required fields: permit, transferDetails, owner, signature",
+      },
       400
     );
   }
 
-  if (!body.paymentPayload.payload?.txHash) {
-    return json(
-      { error: "Missing required field: paymentPayload.payload.txHash" },
-      400
-    );
+  // Validate JPYC token
+  try {
+    if (getAddress(permit.permitted.token) !== getAddress(JPYC_ADDRESS)) {
+      return json(
+        { error: `Unsupported token: expected JPYC (${JPYC_ADDRESS})` },
+        400
+      );
+    }
+  } catch {
+    return json({ error: "Invalid permit.permitted.token address" }, 400);
+  }
+
+  // Validate deadline
+  const deadline = BigInt(permit.deadline);
+  if (deadline < BigInt(Math.floor(Date.now() / 1000))) {
+    return json({ error: "Permit deadline has expired" }, 400);
   }
 
   try {
-    const result = await verifyJPYCPayment(body);
-    return json(result);
-  } catch {
-    return json({ error: "Internal server error" }, 500);
+    const account = privateKeyToAccount(privateKey as Hex);
+
+    const publicClient = createPublicClient({
+      chain: polygon,
+      transport: http(rpcUrl),
+    });
+
+    const walletClient = createWalletClient({
+      account,
+      chain: polygon,
+      transport: http(rpcUrl),
+    });
+
+    const txHash = await walletClient.writeContract({
+      address: PERMIT2_ADDRESS,
+      abi: PERMIT2_ABI,
+      functionName: "permitTransferFrom",
+      args: [
+        {
+          permitted: {
+            token: getAddress(permit.permitted.token),
+            amount: BigInt(permit.permitted.amount),
+          },
+          nonce: BigInt(permit.nonce),
+          deadline: BigInt(permit.deadline),
+        },
+        {
+          to: getAddress(transferDetails.to),
+          requestedAmount: BigInt(transferDetails.requestedAmount),
+        },
+        getAddress(owner) as Address,
+        signature as Hex,
+      ],
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({
+      hash: txHash,
+    });
+
+    if (receipt.status !== "success") {
+      return json({ isValid: false, error: "Transaction reverted" }, 400);
+    }
+
+    return json({ isValid: true, txHash });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return json({ isValid: false, error: message }, 500);
   }
 }
