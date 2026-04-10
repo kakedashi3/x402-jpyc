@@ -11,14 +11,13 @@
       "use": "@vercel/node"
     }
   ],
-  "routes": [
-    {
-      "src": "/api/health",
-      "dest": "/api/health.ts"
-    },
-    {
-      "src": "/api/verify",
-      "dest": "/api/verify.ts"
+  "functions": {
+    "api/verify.ts": {
+      "maxDuration": 60
     }
+  },
+  "routes": [
+    { "src": "/api/health", "dest": "/api/health.ts" },
+    { "src": "/api/verify", "dest": "/api/verify.ts" }
   ]
 }
