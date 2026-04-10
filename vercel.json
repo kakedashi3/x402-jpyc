@@ -1,13 +1,24 @@
 {
   "version": 2,
-  "functions": {
-    "api/verify.ts": {
-      "memory": 256,
-      "maxDuration": 10
+  "outputDirectory": ".",
+  "builds": [
+    {
+      "src": "api/health.ts",
+      "use": "@vercel/node"
     },
-    "api/health.ts": {
-      "memory": 128,
-      "maxDuration": 5
+    {
+      "src": "api/verify.ts",
+      "use": "@vercel/node"
     }
-  }
+  ],
+  "routes": [
+    {
+      "src": "/api/health",
+      "dest": "/api/health.ts"
+    },
+    {
+      "src": "/api/verify",
+      "dest": "/api/verify.ts"
+    }
+  ]
 }
