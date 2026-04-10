@@ -14,7 +14,7 @@
   "dependencies": {
     "@coinbase/cdp-sdk": "^1.46.1",
     "bs58": "^6.0.0",
-    "viem": "^2.21.0"
+    "viem": "^2.47.12"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
