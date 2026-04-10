@@ -12,10 +12,10 @@ Enables AI agents and applications to pay for API access using JPYC (Japanese Ye
 |---|---|
 | x402 is an open payment protocol by Coinbase | Supports ERC-20 payments for HTTP APIs |
 | CDP facilitator does NOT support JPYC | Only USDC on Base is officially supported |
-| JPYC does NOT implement EIP-3009 | `transferWithAuthorization` reverts on-chain |
-| Therefore, a custom facilitator is required | x402-jpyc solves this |
+| JPYC supports EIP-3009 | `transferWithAuthorization` is available on the implementation contract |
+| Therefore, a custom facilitator is required | x402-jpyc solves this using EIP-3009 |
 
-Verified on-chain: `TRANSFER_WITH_AUTHORIZATION_TYPEHASH`, `RECEIVE_WITH_AUTHORIZATION_TYPEHASH`, and `CANCEL_AUTHORIZATION_TYPEHASH` all revert on the JPYC contract.
+Verified on-chain: JPYC implementation contract (`0xafac17fc3936a29ca2d2787ced3c5d1c52007d2e`) contains `transferWithAuthorization`, `receiveWithAuthorization`, `cancelAuthorization`, and `authorizationState`.
 
 ---
 
@@ -28,13 +28,14 @@ Client
   ▼
 Resource Server  (Express + x402 middleware)
   │
-  │  POST /api/verify  (payment proof)
+  │  POST /api/verify  (EIP-3009 authorization)
   ▼
 x402-jpyc Facilitator  (this repo, Vercel Edge)
   │
-  │  permitTransferFrom()
+  │  authorizationState()  — nonce replay check
+  │  transferWithAuthorization(from, to, value, ..., v, r, s)
   ▼
-Permit2 Contract  (0x000000000022D473030F116dDEE9F6B43aC78BA3)
+JPYC Contract  (0xe7c3d8c9a439fede00d2600032d5db0be71c3c29)
   │
   ▼
 Polygon Mainnet  →  JPYC transferred
@@ -71,7 +72,7 @@ app.use(
   paymentMiddleware({
     facilitatorUrl: "https://x402-jpyc.vercel.app",
     paymentRequirements: {
-      scheme: "exact",
+      scheme: "eip3009",
       network: "eip155:137",
       asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC
       amount: "1000000000000000000", // 1 JPYC (18 decimals)
@@ -91,71 +92,85 @@ app.listen(3000);
 
 ## Quick Start — Client Side
 
-Generate a Permit2 signature and call the paid API:
+Generate an EIP-3009 (EIP-712) signature and call the paid API:
 
 ```typescript
-import { createWalletClient, http, parseUnits } from "viem";
+import { createWalletClient, http, parseUnits, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 
-const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const JPYC_ADDRESS = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
-const FACILITATOR_ADDRESS = "0xYOUR_FACILITATOR_WALLET";
+const PAY_TO = "0xRECIPIENT_WALLET_ADDRESS";
 
 const account = privateKeyToAccount("0xYOUR_PRIVATE_KEY");
 const client = createWalletClient({
   account,
   chain: polygon,
-  transport: http("https://polygon-rpc.com"),
+  transport: http("https://polygon-bor-rpc.publicnode.com"),
 });
 
-// 1. Sign Permit2 message
-const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour
-const nonce = BigInt(Date.now());
+// 1. Build EIP-3009 authorization
 const amount = parseUnits("1", 18); // 1 JPYC
+const validAfter = 0n;
+const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour
+const nonce = toHex(crypto.getRandomValues(new Uint8Array(32))); // random bytes32
 
+// 2. Sign EIP-712 typed data (TransferWithAuthorization)
 const signature = await client.signTypedData({
   domain: {
-    name: "Permit2",
+    name: "JPY Coin",
+    version: "1",
     chainId: 137,
-    verifyingContract: PERMIT2_ADDRESS,
+    verifyingContract: JPYC_ADDRESS,
   },
   types: {
-    PermitTransferFrom: [
-      { name: "permitted", type: "TokenPermissions" },
-      { name: "spender", type: "address" },
-      { name: "nonce", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-    ],
-    TokenPermissions: [
-      { name: "token", type: "address" },
-      { name: "amount", type: "uint256" },
+    TransferWithAuthorization: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "validAfter", type: "uint256" },
+      { name: "validBefore", type: "uint256" },
+      { name: "nonce", type: "bytes32" },
     ],
   },
-  primaryType: "PermitTransferFrom",
+  primaryType: "TransferWithAuthorization",
   message: {
-    permitted: { token: JPYC_ADDRESS, amount },
-    spender: FACILITATOR_ADDRESS,
+    from: account.address,
+    to: PAY_TO,
+    value: amount,
+    validAfter,
+    validBefore,
     nonce,
-    deadline,
   },
 });
 
-// 2. Call paid API (x402 client sends this automatically)
+// 3. Call paid API (x402 client sends this automatically)
 const response = await fetch("https://your-server.com/api/data", {
   headers: {
     "X-PAYMENT": JSON.stringify({
-      permit: {
-        permitted: { token: JPYC_ADDRESS, amount: amount.toString() },
-        nonce: nonce.toString(),
-        deadline: deadline.toString(),
+      paymentPayload: {
+        x402Version: 1,
+        scheme: "eip3009",
+        network: "eip155:137",
+        payload: {
+          authorization: {
+            from: account.address,
+            to: PAY_TO,
+            value: amount.toString(),
+            validAfter: validAfter.toString(),
+            validBefore: validBefore.toString(),
+            nonce,
+            signature,
+          },
+        },
       },
-      transferDetails: {
-        to: FACILITATOR_ADDRESS,
-        requestedAmount: amount.toString(),
+      paymentRequirements: {
+        scheme: "eip3009",
+        network: "eip155:137",
+        asset: JPYC_ADDRESS,
+        amount: amount.toString(),
+        payTo: PAY_TO,
       },
-      owner: account.address,
-      signature,
     }),
   },
 });
@@ -171,41 +186,50 @@ console.log(await response.json());
 |---|---|
 | Network | Polygon PoS (`eip155:137`) |
 | Asset | JPYC (`0xe7c3d8c9a439fede00d2600032d5db0be71c3c29`) |
-| Transfer method | Permit2 (`permitTransferFrom`) |
-| Permit2 contract | `0x000000000022D473030F116dDEE9F6B43aC78BA3` |
-| EIP-3009 support | Not supported by JPYC (verified on-chain) |
+| Transfer method | EIP-3009 (`transferWithAuthorization`) |
+| EIP-712 domain | `name: "JPY Coin"`, `version: "1"`, `chainId: 137` |
+| Nonce replay check | `authorizationState(address, bytes32)` |
 | CDP facilitator | Does not support JPYC (verified) |
 | Runtime | Vercel Edge Functions |
-| Response | Async — returns `txHash` immediately, status `"pending"` |
+| Response | Returns `txHash` immediately after broadcast |
 
 ### API Request / Response
 
 ```bash
 curl -X POST https://x402-jpyc.vercel.app/api/verify \
   -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_API_KEY" \
   -d '{
-    "permit": {
-      "permitted": {
-        "token": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
-        "amount": "1000000000000000000"
-      },
-      "nonce": "1234567890",
-      "deadline": "1800000000"
+    "paymentPayload": {
+      "x402Version": 1,
+      "scheme": "eip3009",
+      "network": "eip155:137",
+      "payload": {
+        "authorization": {
+          "from": "0xSENDER_ADDRESS",
+          "to": "0xRECIPIENT_ADDRESS",
+          "value": "1000000000000000000",
+          "validAfter": "0",
+          "validBefore": "1800000000",
+          "nonce": "0xRANDOM_BYTES32",
+          "signature": "0xEIP712_SIGNATURE"
+        }
+      }
     },
-    "transferDetails": {
-      "to": "0xFACILITATOR_ADDRESS",
-      "requestedAmount": "1000000000000000000"
-    },
-    "owner": "0xCLIENT_ADDRESS",
-    "signature": "0xSIGNATURE"
+    "paymentRequirements": {
+      "scheme": "eip3009",
+      "network": "eip155:137",
+      "asset": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
+      "amount": "1000000000000000000",
+      "payTo": "0xRECIPIENT_ADDRESS"
+    }
   }'
 ```
 
 ```json
 {
   "isValid": true,
-  "txHash": "0x...",
-  "status": "pending"
+  "txHash": "0x..."
 }
 ```
 
@@ -213,8 +237,9 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 
 | Variable | Required | Description |
 |---|---|---|
-| `FACILITATOR_PRIVATE_KEY` | Yes | Wallet private key for signing Permit2 transactions |
+| `FACILITATOR_PRIVATE_KEY` | Yes | Wallet private key for broadcasting `transferWithAuthorization` |
 | `POLYGON_RPC_URL` | Yes | Polygon RPC endpoint (Alchemy / QuickNode recommended) |
+| `API_KEY` | Yes | API key for authenticating requests to the facilitator |
 
 ---
 
@@ -261,10 +286,10 @@ x402 プロトコルは Coinbase が策定したオープンな HTTP 課金プ�
 |---|---|
 | x402 は Coinbase のオープン課金プロトコル | HTTP API への ERC-20 支払いをサポート |
 | CDP ファシリテーターは JPYC 非対応 | Base 上の USDC のみ公式サポート |
-| JPYC は EIP-3009 を実装していない | `transferWithAuthorization` がオンチェーンでリバート |
-| したがってカスタム実装が必要 | x402-jpyc がその実装 |
+| JPYC は EIP-3009 対応 | 実装コントラクトに `transferWithAuthorization` が存在 |
+| したがってカスタム実装が必要 | x402-jpyc が EIP-3009 を使って実装 |
 
-オンチェーン確認済み：JPYC コントラクト上で `TRANSFER_WITH_AUTHORIZATION_TYPEHASH` 等がすべてリバートすることを確認。
+オンチェーン確認済み：JPYC 実装コントラクト（`0xafac17fc3936a29ca2d2787ced3c5d1c52007d2e`）に `transferWithAuthorization`、`authorizationState` 等が存在することを確認。
 
 ---
 
@@ -277,13 +302,14 @@ x402 プロトコルは Coinbase が策定したオープンな HTTP 課金プ�
   ▼
 リソースサーバー（Express + x402 ミドルウェア）
   │
-  │  POST /api/verify（支払い証明）
+  │  POST /api/verify（EIP-3009 認可データ）
   ▼
 x402-jpyc ファシリテーター（このリポジトリ、Vercel Edge）
   │
-  │  permitTransferFrom()
+  │  authorizationState()  — nonce 二重使用チェック
+  │  transferWithAuthorization(from, to, value, ..., v, r, s)
   ▼
-Permit2 コントラクト（0x000000000022D473030F116dDEE9F6B43aC78BA3）
+JPYC コントラクト（0xe7c3d8c9a439fede00d2600032d5db0be71c3c29）
   │
   ▼
 Polygon メインネット  →  JPYC 送金完了
@@ -314,7 +340,7 @@ app.use(
   paymentMiddleware({
     facilitatorUrl: "https://x402-jpyc.vercel.app",
     paymentRequirements: {
-      scheme: "exact",
+      scheme: "eip3009",
       network: "eip155:137",
       asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC
       amount: "1000000000000000000", // 1 JPYC（18 decimals）
@@ -334,71 +360,85 @@ app.listen(3000);
 
 ## クイックスタート（クライアント側）
 
-Permit2 署名を生成して有料 API を呼び出す例：
+EIP-3009（EIP-712）署名を生成して有料 API を呼び出す例：
 
 ```typescript
-import { createWalletClient, http, parseUnits } from "viem";
+import { createWalletClient, http, parseUnits, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 
-const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const JPYC_ADDRESS = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
-const FACILITATOR_ADDRESS = "0xYOUR_FACILITATOR_WALLET";
+const PAY_TO = "0x受取先ウォレットアドレス";
 
 const account = privateKeyToAccount("0xYOUR_PRIVATE_KEY");
 const client = createWalletClient({
   account,
   chain: polygon,
-  transport: http("https://polygon-rpc.com"),
+  transport: http("https://polygon-bor-rpc.publicnode.com"),
 });
 
-// 1. Permit2 署名を生成
-const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
-const nonce = BigInt(Date.now());
+// 1. EIP-3009 認可データを構築
 const amount = parseUnits("1", 18); // 1 JPYC
+const validAfter = 0n;
+const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1時間
+const nonce = toHex(crypto.getRandomValues(new Uint8Array(32))); // ランダム bytes32
 
+// 2. EIP-712 署名（TransferWithAuthorization）
 const signature = await client.signTypedData({
   domain: {
-    name: "Permit2",
+    name: "JPY Coin",
+    version: "1",
     chainId: 137,
-    verifyingContract: PERMIT2_ADDRESS,
+    verifyingContract: JPYC_ADDRESS,
   },
   types: {
-    PermitTransferFrom: [
-      { name: "permitted", type: "TokenPermissions" },
-      { name: "spender", type: "address" },
-      { name: "nonce", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-    ],
-    TokenPermissions: [
-      { name: "token", type: "address" },
-      { name: "amount", type: "uint256" },
+    TransferWithAuthorization: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "validAfter", type: "uint256" },
+      { name: "validBefore", type: "uint256" },
+      { name: "nonce", type: "bytes32" },
     ],
   },
-  primaryType: "PermitTransferFrom",
+  primaryType: "TransferWithAuthorization",
   message: {
-    permitted: { token: JPYC_ADDRESS, amount },
-    spender: FACILITATOR_ADDRESS,
+    from: account.address,
+    to: PAY_TO,
+    value: amount,
+    validAfter,
+    validBefore,
     nonce,
-    deadline,
   },
 });
 
-// 2. 有料 API を呼び出す
+// 3. 有料 API を呼び出す（x402 クライアントが自動的に送信）
 const response = await fetch("https://your-server.com/api/data", {
   headers: {
     "X-PAYMENT": JSON.stringify({
-      permit: {
-        permitted: { token: JPYC_ADDRESS, amount: amount.toString() },
-        nonce: nonce.toString(),
-        deadline: deadline.toString(),
+      paymentPayload: {
+        x402Version: 1,
+        scheme: "eip3009",
+        network: "eip155:137",
+        payload: {
+          authorization: {
+            from: account.address,
+            to: PAY_TO,
+            value: amount.toString(),
+            validAfter: validAfter.toString(),
+            validBefore: validBefore.toString(),
+            nonce,
+            signature,
+          },
+        },
       },
-      transferDetails: {
-        to: FACILITATOR_ADDRESS,
-        requestedAmount: amount.toString(),
+      paymentRequirements: {
+        scheme: "eip3009",
+        network: "eip155:137",
+        asset: JPYC_ADDRESS,
+        amount: amount.toString(),
+        payTo: PAY_TO,
       },
-      owner: account.address,
-      signature,
     }),
   },
 });
@@ -414,41 +454,50 @@ console.log(await response.json());
 |---|---|
 | ネットワーク | Polygon PoS（`eip155:137`） |
 | トークン | JPYC（`0xe7c3d8c9a439fede00d2600032d5db0be71c3c29`） |
-| 送金方式 | Permit2（`permitTransferFrom`） |
-| Permit2 コントラクト | `0x000000000022D473030F116dDEE9F6B43aC78BA3` |
-| EIP-3009 対応 | JPYC は非対応（オンチェーン確認済み） |
+| 送金方式 | EIP-3009（`transferWithAuthorization`） |
+| EIP-712 ドメイン | `name: "JPY Coin"`, `version: "1"`, `chainId: 137` |
+| Nonce 二重使用チェック | `authorizationState(address, bytes32)` |
 | CDP ファシリテーター | JPYC 非対応（確認済み） |
 | ランタイム | Vercel Edge Functions |
-| レスポンス方式 | 非同期 — `txHash` を即座に返し、`status: "pending"` |
+| レスポンス方式 | ブロードキャスト後 `txHash` を即座に返却 |
 
 ### リクエスト / レスポンス
 
 ```bash
 curl -X POST https://x402-jpyc.vercel.app/api/verify \
   -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_API_KEY" \
   -d '{
-    "permit": {
-      "permitted": {
-        "token": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
-        "amount": "1000000000000000000"
-      },
-      "nonce": "1234567890",
-      "deadline": "1800000000"
+    "paymentPayload": {
+      "x402Version": 1,
+      "scheme": "eip3009",
+      "network": "eip155:137",
+      "payload": {
+        "authorization": {
+          "from": "0x送信元アドレス",
+          "to": "0x受取先アドレス",
+          "value": "1000000000000000000",
+          "validAfter": "0",
+          "validBefore": "1800000000",
+          "nonce": "0xランダムBYTES32",
+          "signature": "0xEIP712署名"
+        }
+      }
     },
-    "transferDetails": {
-      "to": "0xFACILITATOR_ADDRESS",
-      "requestedAmount": "1000000000000000000"
-    },
-    "owner": "0xCLIENT_ADDRESS",
-    "signature": "0xSIGNATURE"
+    "paymentRequirements": {
+      "scheme": "eip3009",
+      "network": "eip155:137",
+      "asset": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
+      "amount": "1000000000000000000",
+      "payTo": "0x受取先アドレス"
+    }
   }'
 ```
 
 ```json
 {
   "isValid": true,
-  "txHash": "0x...",
-  "status": "pending"
+  "txHash": "0x..."
 }
 ```
 
@@ -456,8 +505,9 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 
 | 変数名 | 必須 | 説明 |
 |---|---|---|
-| `FACILITATOR_PRIVATE_KEY` | Yes | Permit2 トランザクションに署名するウォレットの秘密鍵 |
+| `FACILITATOR_PRIVATE_KEY` | Yes | `transferWithAuthorization` をブロードキャストするウォレットの秘密鍵 |
 | `POLYGON_RPC_URL` | Yes | Polygon RPC エンドポイント（Alchemy / QuickNode 推奨） |
+| `API_KEY` | Yes | ファシリテーターへのリクエスト認証用 API キー |
 
 ---
 
