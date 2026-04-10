@@ -1,8 +1,13 @@
 {
   "version": 2,
-  "outputDirectory": ".",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "dist/api/health.js": { "memory": 128 },
+    "dist/api/verify.js": { "memory": 256, "maxDuration": 30 }
+  },
   "routes": [
-    { "src": "/api/health", "dest": "/api/health.ts" },
-    { "src": "/api/verify", "dest": "/api/verify.ts" }
+    { "src": "/api/health", "dest": "/dist/api/health.js" },
+    { "src": "/api/verify", "dest": "/dist/api/verify.js" }
   ]
 }

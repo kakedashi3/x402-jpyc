@@ -3,10 +3,9 @@
   "version": "1.0.0",
   "description": "x402 protocol facilitator for JPYC on Polygon",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "vercel dev",
-    "build": "echo 'API-only project: no build output needed'",
+    "build": "tsc",
+    "dev": "ts-node api/health.ts",
     "deploy": "vercel --prod",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

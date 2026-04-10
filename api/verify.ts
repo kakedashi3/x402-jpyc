@@ -1,7 +1,3 @@
-export const config = {
-  runtime: "edge",
-};
-
 import {
   createWalletClient,
   getAddress,
