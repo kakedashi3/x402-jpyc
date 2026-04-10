@@ -13,6 +13,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@coinbase/cdp-sdk": "^1.46.1",
+    "bs58": "^6.0.0",
     "viem": "^2.21.0"
   },
   "devDependencies": {

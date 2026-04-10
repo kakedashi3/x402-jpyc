@@ -1,9 +1,13 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/*.ts",
-      "use": "@vercel/node"
+  "functions": {
+    "api/verify.ts": {
+      "memory": 256,
+      "maxDuration": 10
+    },
+    "api/health.ts": {
+      "memory": 128,
+      "maxDuration": 5
     }
-  ]
+  }
 }
