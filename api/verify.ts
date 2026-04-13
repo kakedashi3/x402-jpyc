@@ -237,10 +237,26 @@ export default async function handler(req: Request): Promise<Response> {
       args: [fromAddr, toAddr, value, validAfter, validBefore, nonce, v, r, s],
     });
 
+    console.log(JSON.stringify({
+      event: "verify_success",
+      txHash,
+      amount: paymentRequirements.amount,
+      asset: paymentRequirements.asset,
+      payTo: paymentRequirements.payTo,
+      from: auth.from,
+      network: "eip155:137",
+      timestamp: new Date().toISOString(),
+    }));
+
     return json({ isValid: true, txHash });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[verify] transferWithAuthorization failed:", message);
+    console.log(JSON.stringify({
+      event: "verify_failed",
+      reason: message,
+      timestamp: new Date().toISOString(),
+    }));
     return json({ isValid: false, error: "Transaction execution failed" }, 500);
   }
 }
