@@ -174,8 +174,11 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(data.error).toContain("payTo");
   });
 
-  it("returns 200 with isValid and payer on success", async () => {
+  it("returns 200 with txHash on success", async () => {
     mockPublicClient.readContract.mockResolvedValue(false); // nonce not used
+    mockWalletClient.writeContract.mockResolvedValue(
+      "0xdeadbeef" as `0x${string}`,
+    );
 
     const res = await handler(
       makeRequest({ apiKey: "test-secret", body: validBody }),
@@ -183,7 +186,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(res.status).toBe(200);
     const data: any = await res.json();
     expect(data.isValid).toBe(true);
-    expect(data.payer).toBe(validAuth.from);
+    expect(data.txHash).toBe("0xdeadbeef");
   });
 
   it("returns 500 when authorizationState RPC call fails", async () => {
@@ -195,5 +198,20 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(res.status).toBe(500);
     const data: any = await res.json();
     expect(data.error).toContain("authorization state");
+  });
+
+  it("returns 500 when transferWithAuthorization fails", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockWalletClient.writeContract.mockRejectedValue(
+      new Error("execution reverted: ECRecover failed"),
+    );
+
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: validBody }),
+    );
+    expect(res.status).toBe(500);
+    const data: any = await res.json();
+    expect(data.error).toBe("Internal server error");
+    expect(data.isValid).toBeUndefined();
   });
 });

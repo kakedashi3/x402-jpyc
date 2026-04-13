@@ -4,23 +4,42 @@ export const config = {
 
 import {
   createPublicClient,
+  createWalletClient,
   getAddress,
   http,
   parseAbi,
   type Address,
   type Hex,
 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 
 const JPYC_ADDRESS: Address = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
 
 const EIP3009_ABI = parseAbi([
+  "function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)",
   "function authorizationState(address authorizer, bytes32 nonce) view returns (bool)",
 ]);
 
-/* ── Module-level client setup ── */
+/* ── Module-level wallet setup ── */
 
+const _privateKey = process.env.FACILITATOR_PRIVATE_KEY;
 const _rpcUrl = process.env.POLYGON_RPC_URL;
+
+const _key = _privateKey
+  ? ((_privateKey.startsWith("0x") ? _privateKey : `0x${_privateKey}`) as Hex)
+  : null;
+
+const _account = _key ? privateKeyToAccount(_key) : null;
+
+const walletClient =
+  _account && _rpcUrl
+    ? createWalletClient({
+        account: _account,
+        chain: polygon,
+        transport: http(_rpcUrl),
+      })
+    : null;
 
 const publicClient = _rpcUrl
   ? createPublicClient({ chain: polygon, transport: http(_rpcUrl) })
@@ -62,6 +81,20 @@ function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
 }
 
+function splitSignature(sig: Hex): { v: number; r: Hex; s: Hex } {
+  // 65 bytes = 32 (r) + 32 (s) + 1 (v)
+  const raw = sig.startsWith("0x") ? sig.slice(2) : sig;
+  if (raw.length !== 130) {
+    throw new Error(`Invalid signature length: expected 130 hex chars, got ${raw.length}`);
+  }
+  const r = `0x${raw.slice(0, 64)}` as Hex;
+  const s = `0x${raw.slice(64, 128)}` as Hex;
+  let v = parseInt(raw.slice(128, 130), 16);
+  // Normalize v: some signers use 0/1 instead of 27/28
+  if (v < 27) v += 27;
+  return { v, r, s };
+}
+
 /* ── Handler ── */
 
 export default async function handler(req: Request): Promise<Response> {
@@ -72,15 +105,15 @@ export default async function handler(req: Request): Promise<Response> {
   // API key auth
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    return json({ error: "Service not configured (API_KEY)" }, 503);
+    return Response.json({ error: "Service not configured" }, { status: 503 });
   }
   const provided = req.headers.get("x-api-key");
-  if (!provided || provided !== apiKey) {
-    return json({ error: "Unauthorized" }, 401);
+  if (provided !== apiKey) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!publicClient) {
-    return json({ error: "Service not configured (RPC)" }, 503);
+  if (!walletClient || !publicClient) {
+    return json({ error: "Service not configured (wallet/RPC)" }, 503);
   }
 
   // Parse body
@@ -158,6 +191,7 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const nonce = auth.nonce as Hex;
+  const validAfter = BigInt(auth.validAfter ?? "0");
   const validBefore = BigInt(auth.validBefore ?? "0");
 
   // Check validBefore hasn't expired
@@ -183,5 +217,29 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Failed to check authorization state" }, 500);
   }
 
-  return json({ isValid: true, payer: auth.from });
+  // Split signature into v, r, s
+  let v: number;
+  let r: Hex;
+  let s: Hex;
+  try {
+    ({ v, r, s } = splitSignature(auth.signature as Hex));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return json({ error: `Invalid signature: ${message}` }, 400);
+  }
+
+  // Execute transferWithAuthorization
+  try {
+    const txHash = await walletClient.writeContract({
+      address: JPYC_ADDRESS,
+      abi: EIP3009_ABI,
+      functionName: "transferWithAuthorization",
+      args: [fromAddr, toAddr, value, validAfter, validBefore, nonce, v, r, s],
+    });
+
+    return json({ isValid: true, txHash });
+  } catch (err) {
+    console.error("[verify] unexpected error:", err);
+    return Response.json({ error: "Internal server error" }, { status: 500 });
+  }
 }
