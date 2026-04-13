@@ -30,10 +30,10 @@ vi.stubEnv("FACILITATOR_PRIVATE_KEY", "0x" + "ab".repeat(32));
 vi.stubEnv("POLYGON_RPC_URL", "https://fake-rpc.test");
 vi.stubEnv("API_KEY", "test-secret");
 
-let handler: typeof import("../verify.js").default;
+let handler: typeof import("../settle.js").default;
 
 beforeAll(async () => {
-  const mod = await import("../verify.js");
+  const mod = await import("../settle.js");
   handler = mod.default;
 });
 
@@ -76,7 +76,7 @@ function makeRequest(options: {
   if (options.apiKey) {
     headers.set("x-api-key", options.apiKey);
   }
-  return new Request("https://example.com/api/verify", {
+  return new Request("https://example.com/api/settle", {
     method: options.method ?? "POST",
     headers,
     ...(options.method !== "GET" && {
@@ -88,7 +88,7 @@ function makeRequest(options: {
   });
 }
 
-describe("POST /api/verify (EIP-3009)", () => {
+describe("POST /api/settle (EIP-3009)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("API_KEY", "test-secret");
@@ -96,7 +96,7 @@ describe("POST /api/verify (EIP-3009)", () => {
 
   it("returns 405 for non-POST methods", async () => {
     const res = await handler(
-      new Request("https://example.com/api/verify", { method: "GET" }),
+      new Request("https://example.com/api/settle", { method: "GET" }),
     );
     expect(res.status).toBe(405);
   });
@@ -114,7 +114,7 @@ describe("POST /api/verify (EIP-3009)", () => {
   });
 
   it("returns 400 for invalid JSON", async () => {
-    const req = new Request("https://example.com/api/verify", {
+    const req = new Request("https://example.com/api/settle", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -174,26 +174,34 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(data.error).toContain("payTo");
   });
 
-  it("returns 200 with isValid and payer on success", async () => {
+  it("returns 200 with success, txHash and network on success", async () => {
     mockPublicClient.readContract.mockResolvedValue(false); // nonce not used
+    mockWalletClient.writeContract.mockResolvedValue(
+      "0xdeadbeef" as `0x${string}`,
+    );
 
     const res = await handler(
       makeRequest({ apiKey: "test-secret", body: validBody }),
     );
     expect(res.status).toBe(200);
     const data: any = await res.json();
-    expect(data.isValid).toBe(true);
-    expect(data.payer).toBe(validAuth.from);
+    expect(data.success).toBe(true);
+    expect(data.txHash).toBe("0xdeadbeef");
+    expect(data.network).toBe("eip155:137");
   });
 
-  it("returns 500 when authorizationState RPC call fails", async () => {
-    mockPublicClient.readContract.mockRejectedValue(new Error("RPC error"));
+  it("returns 500 when transferWithAuthorization fails", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockWalletClient.writeContract.mockRejectedValue(
+      new Error("execution reverted: ECRecover failed"),
+    );
 
     const res = await handler(
       makeRequest({ apiKey: "test-secret", body: validBody }),
     );
     expect(res.status).toBe(500);
     const data: any = await res.json();
-    expect(data.error).toContain("authorization state");
+    expect(data.success).toBe(false);
+    expect(data.error).toBe("Transaction execution failed");
   });
 });

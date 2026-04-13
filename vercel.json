@@ -1,4 +1,9 @@
 {
   "version": 2,
-  "outputDirectory": "."
+  "outputDirectory": ".",
+  "functions": {
+    "api/verify.ts": { "runtime": "@vercel/node" },
+    "api/settle.ts": { "runtime": "@vercel/node" },
+    "api/health.ts": { "runtime": "@vercel/node" }
+  }
 }
