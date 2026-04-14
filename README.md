@@ -43,11 +43,12 @@ Polygon Mainnet  →  JPYC transferred
 
 ---
 
-## Facilitator Endpoint
+## Facilitator Endpoints
 
 ```
-POST https://x402-jpyc.vercel.app/api/verify
-GET  https://x402-jpyc.vercel.app/api/health
+POST https://x402-jpyc.vercel.app/api/verify   — validate payment authorization
+POST https://x402-jpyc.vercel.app/api/settle   — execute on-chain transfer
+GET  https://x402-jpyc.vercel.app/api/health   — health check
 ```
 
 ---
@@ -228,8 +229,7 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 
 ```json
 {
-  "isValid": true,
-  "txHash": "0x..."
+  "isValid": true
 }
 ```
 
@@ -239,7 +239,39 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 |---|---|---|
 | `FACILITATOR_PRIVATE_KEY` | Yes | Wallet private key for broadcasting `transferWithAuthorization` |
 | `POLYGON_RPC_URL` | Yes | Polygon RPC endpoint (Alchemy / QuickNode recommended) |
-| `API_KEY` | Yes | API key for authenticating requests to the facilitator |
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server-side only, never expose to clients) |
+
+### API Key Management
+
+API keys are managed via a Supabase `api_keys` table. Each key stores:
+
+| Column | Description |
+|---|---|
+| `api_key_hash` | SHA-256 hash of the raw API key (raw key is never stored) |
+| `api_key_prefix` | First few chars of the key for display/identification |
+| `recipient_address` | On-chain address that receives JPYC payments for this key |
+| `is_active` | Revoke a key without deleting it |
+
+The `X-API-KEY` header value is hashed on each request and matched against `api_key_hash`. The `recipient_address` registered in the database is used as the transfer destination — the caller cannot override it.
+
+---
+
+## Changelog
+
+### 2026-04-14 — Supabase-based API key authentication
+
+**Breaking changes:**
+
+- `API_KEY` environment variable removed. Replace with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+- `POST /api/verify` no longer returns `txHash`. Response is now `{ "isValid": true }`.
+- `recipient_address` is now taken from the `api_keys` table in Supabase. Callers can no longer set an arbitrary `payTo` address — it must match the address registered for the API key.
+
+**New behavior:**
+
+- Each API key is associated with a `recipient_address` in the database. The facilitator enforces that `authorization.to` matches this address.
+- Successful requests are logged to `api_key_usage` (`event: verify_success` / `settle_success`).
+- `last_used_at` is updated on every authenticated request.
 
 ---
 
@@ -320,8 +352,9 @@ Polygon メインネット  →  JPYC 送金完了
 ## ファシリテーターエンドポイント
 
 ```
-POST https://x402-jpyc.vercel.app/api/verify
-GET  https://x402-jpyc.vercel.app/api/health
+POST https://x402-jpyc.vercel.app/api/verify   — 支払い認可の検証
+POST https://x402-jpyc.vercel.app/api/settle   — オンチェーン送金の実行
+GET  https://x402-jpyc.vercel.app/api/health   — ヘルスチェック
 ```
 
 ---
@@ -496,8 +529,7 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 
 ```json
 {
-  "isValid": true,
-  "txHash": "0x..."
+  "isValid": true
 }
 ```
 
@@ -507,7 +539,39 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 |---|---|---|
 | `FACILITATOR_PRIVATE_KEY` | Yes | `transferWithAuthorization` をブロードキャストするウォレットの秘密鍵 |
 | `POLYGON_RPC_URL` | Yes | Polygon RPC エンドポイント（Alchemy / QuickNode 推奨） |
-| `API_KEY` | Yes | ファシリテーターへのリクエスト認証用 API キー |
+| `SUPABASE_URL` | Yes | Supabase プロジェクト URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase サービスロールキー（サーバーサイド専用。クライアントに公開しないこと） |
+
+### API キーの管理
+
+API キーは Supabase の `api_keys` テーブルで管理します。
+
+| カラム | 説明 |
+|---|---|
+| `api_key_hash` | 生のキーを SHA-256 ハッシュ化した値（生キーは保存しない） |
+| `api_key_prefix` | 表示・識別用のキー先頭数文字 |
+| `recipient_address` | このキーに紐づく JPYC の受取アドレス |
+| `is_active` | キーを削除せずに無効化できる |
+
+リクエストごとに `X-API-KEY` ヘッダーの値をハッシュ化して `api_key_hash` と照合します。送金先は DB に登録された `recipient_address` が使われ、呼び出し元が任意のアドレスを指定することはできません。
+
+---
+
+## 更新履歴
+
+### 2026-04-14 — Supabase による API キー認証に移行
+
+**破壊的変更：**
+
+- 環境変数 `API_KEY` を廃止。`SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` に置き換えてください。
+- `POST /api/verify` のレスポンスから `txHash` を削除。レスポンスは `{ "isValid": true }` のみになりました。
+- 送金先アドレスは `api_keys` テーブルの `recipient_address` から取得するようになりました。呼び出し元が `payTo` を自由に指定することはできなくなりました。
+
+**新しい動作：**
+
+- API キーごとに `recipient_address` を DB で管理。`authorization.to` がこのアドレスと一致しない場合はエラーを返します。
+- 認証成功後に `api_key_usage` テーブルへログを記録（`event: verify_success` / `settle_success`）。
+- 認証リクエストのたびに `last_used_at` を更新します。
 
 ---
 
