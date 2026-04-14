@@ -13,6 +13,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
+import { supabase } from "../lib/supabase";
 
 const JPYC_ADDRESS: Address = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
 
@@ -81,6 +82,16 @@ function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
 }
 
+async function hashApiKey(apiKey: string): Promise<string> {
+  const buf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(apiKey),
+  );
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function splitSignature(sig: Hex): { v: number; r: Hex; s: Hex } {
   // 65 bytes = 32 (r) + 32 (s) + 1 (v)
   const raw = sig.startsWith("0x") ? sig.slice(2) : sig;
@@ -102,14 +113,22 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Method not allowed" }, 405);
   }
 
-  // API key auth
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    return Response.json({ error: "Service not configured" }, { status: 503 });
+  // API key auth via Supabase
+  const providedKey = req.headers.get("x-api-key");
+  if (!providedKey) {
+    return json({ error: "Unauthorized" }, 401);
   }
-  const provided = req.headers.get("x-api-key");
-  if (provided !== apiKey) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+  const keyHash = await hashApiKey(providedKey);
+  const { data: keyRow, error: keyError } = await supabase
+    .from("api_keys")
+    .select("id, user_id")
+    .eq("api_key_hash", keyHash)
+    .eq("is_active", true)
+    .single();
+
+  if (keyError || !keyRow) {
+    return json({ error: "Unauthorized" }, 401);
   }
 
   if (!walletClient || !publicClient) {
@@ -195,8 +214,8 @@ export default async function handler(req: Request): Promise<Response> {
   const validBefore = BigInt(auth.validBefore ?? "0");
 
   // Check validBefore hasn't expired
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  if (validBefore !== 0n && validBefore < now) {
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  if (validBefore !== 0n && validBefore < nowSec) {
     return json({ error: "Authorization has expired (validBefore)" }, 400);
   }
 
@@ -228,18 +247,21 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: `Invalid signature: ${message}` }, 400);
   }
 
-  // Execute transferWithAuthorization
-  try {
-    const txHash = await walletClient.writeContract({
-      address: JPYC_ADDRESS,
-      abi: EIP3009_ABI,
-      functionName: "transferWithAuthorization",
-      args: [fromAddr, toAddr, value, validAfter, validBefore, nonce, v, r, s],
-    });
+  // Verify only — do not execute transaction
+  const now = new Date().toISOString();
 
-    return json({ isValid: true, txHash });
-  } catch (err) {
-    console.error("[verify] unexpected error:", err);
-    return Response.json({ error: "Internal server error" }, { status: 500 });
-  }
+  // Log usage and update last_used_at in parallel
+  await Promise.all([
+    supabase.from("api_key_usage").insert({
+      api_key_id: keyRow.id,
+      event: "verify_success",
+      created_at: now,
+    }),
+    supabase
+      .from("api_keys")
+      .update({ last_used_at: now })
+      .eq("id", keyRow.id),
+  ]);
+
+  return json({ isValid: true });
 }

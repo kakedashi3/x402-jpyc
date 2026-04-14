@@ -13,6 +13,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
+import { supabase } from "../lib/supabase";
 
 const JPYC_ADDRESS: Address = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
 
@@ -81,6 +82,16 @@ function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
 }
 
+async function hashApiKey(apiKey: string): Promise<string> {
+  const buf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(apiKey),
+  );
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function splitSignature(sig: Hex): { v: number; r: Hex; s: Hex } {
   // 65 bytes = 32 (r) + 32 (s) + 1 (v)
   const raw = sig.startsWith("0x") ? sig.slice(2) : sig;
@@ -102,15 +113,25 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Method not allowed" }, 405);
   }
 
-  // API key auth
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-    return json({ error: "Service not configured (API_KEY)" }, 503);
-  }
-  const provided = req.headers.get("x-api-key");
-  if (!provided || provided !== apiKey) {
+  // API key auth via Supabase
+  const providedKey = req.headers.get("x-api-key");
+  if (!providedKey) {
     return json({ error: "Unauthorized" }, 401);
   }
+
+  const keyHash = await hashApiKey(providedKey);
+  const { data: keyRow, error: keyError } = await supabase
+    .from("api_keys")
+    .select("id, user_id, recipient_address")
+    .eq("api_key_hash", keyHash)
+    .eq("is_active", true)
+    .single();
+
+  if (keyError || !keyRow) {
+    return json({ error: "Unauthorized" }, 401);
+  }
+
+  const recipientAddress: Address = getAddress(keyRow.recipient_address);
 
   if (!walletClient || !publicClient) {
     return json({ error: "Service not configured (wallet/RPC)" }, 503);
@@ -182,10 +203,10 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  // Validate recipient matches payTo
-  if (toAddr !== getAddress(paymentRequirements.payTo)) {
+  // Validate recipient matches DB recipient_address
+  if (toAddr !== recipientAddress) {
     return json(
-      { error: "Authorization 'to' does not match paymentRequirements.payTo" },
+      { error: "Authorization 'to' does not match registered recipient address" },
       400,
     );
   }
@@ -228,25 +249,40 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: `Invalid signature: ${message}` }, 400);
   }
 
-  // Execute transferWithAuthorization
+  // Execute transferWithAuthorization (use recipientAddress from DB)
   try {
     const txHash = await walletClient.writeContract({
       address: JPYC_ADDRESS,
       abi: EIP3009_ABI,
       functionName: "transferWithAuthorization",
-      args: [fromAddr, toAddr, value, validAfter, validBefore, nonce, v, r, s],
+      args: [fromAddr, recipientAddress, value, validAfter, validBefore, nonce, v, r, s],
     });
+
+    const now = new Date().toISOString();
 
     console.log(JSON.stringify({
       event: "settle_success",
       txHash,
       amount: paymentRequirements.amount,
       asset: paymentRequirements.asset,
-      payTo: paymentRequirements.payTo,
+      payTo: recipientAddress,
       from: auth.from,
       network: "eip155:137",
-      timestamp: new Date().toISOString(),
+      timestamp: now,
     }));
+
+    // Log usage and update last_used_at in parallel
+    await Promise.all([
+      supabase.from("api_key_usage").insert({
+        api_key_id: keyRow.id,
+        event: "settle_success",
+        created_at: now,
+      }),
+      supabase
+        .from("api_keys")
+        .update({ last_used_at: now })
+        .eq("id", keyRow.id),
+    ]);
 
     return json({ success: true, txHash, network: "eip155:137" });
   } catch (err) {
