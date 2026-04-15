@@ -46,9 +46,10 @@ Polygon Mainnet  →  JPYC transferred
 ## Facilitator Endpoints
 
 ```
-POST https://x402-jpyc.vercel.app/api/verify   — validate payment authorization
-POST https://x402-jpyc.vercel.app/api/settle   — execute on-chain transfer
-GET  https://x402-jpyc.vercel.app/api/health   — health check
+POST https://x402-jpyc.vercel.app/api/verify        — validate payment authorization
+POST https://x402-jpyc.vercel.app/api/settle        — execute on-chain transfer
+GET  https://x402-jpyc.vercel.app/api/health        — health check
+GET  https://x402-jpyc.vercel.app/api/payment-info  — get recipient address for payTo
 ```
 
 ---
@@ -259,6 +260,23 @@ The `X-API-KEY` header value is hashed on each request and matched against `api_
 
 ## Changelog
 
+### 2026-04-15 — Add `GET /api/payment-info` endpoint
+
+Resource server developers can now fetch their `payTo` address programmatically at startup without checking the dashboard manually.
+
+```bash
+curl https://x402-jpyc.vercel.app/api/payment-info \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+```json
+{
+  "recipientAddress": "0xYOUR_RECIPIENT_ADDRESS",
+  "network": "eip155:137",
+  "token": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29"
+}
+```
+
 ### 2026-04-14 — Supabase-based API key authentication
 
 **Breaking changes:**
@@ -352,9 +370,10 @@ Polygon メインネット  →  JPYC 送金完了
 ## ファシリテーターエンドポイント
 
 ```
-POST https://x402-jpyc.vercel.app/api/verify   — 支払い認可の検証
-POST https://x402-jpyc.vercel.app/api/settle   — オンチェーン送金の実行
-GET  https://x402-jpyc.vercel.app/api/health   — ヘルスチェック
+POST https://x402-jpyc.vercel.app/api/verify        — 支払い認可の検証
+POST https://x402-jpyc.vercel.app/api/settle        — オンチェーン送金の実行
+GET  https://x402-jpyc.vercel.app/api/health        — ヘルスチェック
+GET  https://x402-jpyc.vercel.app/api/payment-info  — payTo に使う受取アドレスの取得
 ```
 
 ---
@@ -558,6 +577,23 @@ API キーは Supabase の `api_keys` テーブルで管理します。
 ---
 
 ## 更新履歴
+
+### 2026-04-15 — `GET /api/payment-info` エンドポイントを追加
+
+リソースサーバー開発者がダッシュボードを手動確認しなくても、起動時に `payTo` アドレスをプログラマブルに取得できるようになりました。
+
+```bash
+curl https://x402-jpyc.vercel.app/api/payment-info \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+```json
+{
+  "recipientAddress": "0xYOUR_RECIPIENT_ADDRESS",
+  "network": "eip155:137",
+  "token": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29"
+}
+```
 
 ### 2026-04-14 — Supabase による API キー認証に移行
 
