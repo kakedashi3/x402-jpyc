@@ -230,7 +230,8 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 
 ```json
 {
-  "isValid": true
+  "isValid": true,
+  "txHash": "0x..."
 }
 ```
 
@@ -242,6 +243,8 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 | `POLYGON_RPC_URL` | Yes | Polygon RPC endpoint (Alchemy / QuickNode recommended) |
 | `SUPABASE_URL` | Yes | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server-side only, never expose to clients) |
+| `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST URL for nonce replay protection |
+| `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis REST token |
 
 ### API Key Management
 
@@ -259,6 +262,26 @@ The `X-API-KEY` header value is hashed on each request and matched against `api_
 ---
 
 ## Changelog
+
+### 2026-04-16 — Upstash Redis-based replay protection
+
+Nonce replay protection is now backed by **Upstash Redis** instead of an in-memory `Set`.
+
+**What changed:**
+
+- `lib/replay.ts` rewritten to use `@upstash/redis` with atomic `SET NX + TTL`.
+- Key format: `replay:137:{contractAddress}:{from}:{nonce}` — scoped per chain, contract, sender, and nonce.
+- TTL is derived from `validBefore`, so keys expire automatically when the authorization window closes.
+- Both `/api/verify` and `/api/settle` claim the nonce in Redis after the on-chain `authorizationState` check, preventing TOCTOU races between concurrent requests.
+- On Redis failure the service **fails open** — the on-chain `authorizationState` remains the authoritative guard.
+- `POST /api/verify` now returns `txHash` in addition to `isValid`.
+
+**New environment variables required:**
+
+```
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
+```
 
 ### 2026-04-15 — Add `GET /api/payment-info` endpoint
 
@@ -548,7 +571,8 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 
 ```json
 {
-  "isValid": true
+  "isValid": true,
+  "txHash": "0x..."
 }
 ```
 
@@ -560,6 +584,8 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
 | `POLYGON_RPC_URL` | Yes | Polygon RPC エンドポイント（Alchemy / QuickNode 推奨） |
 | `SUPABASE_URL` | Yes | Supabase プロジェクト URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase サービスロールキー（サーバーサイド専用。クライアントに公開しないこと） |
+| `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST URL（nonce リプレイ保護用） |
+| `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis REST トークン |
 
 ### API キーの管理
 
@@ -577,6 +603,26 @@ API キーは Supabase の `api_keys` テーブルで管理します。
 ---
 
 ## 更新履歴
+
+### 2026-04-16 — Upstash Redis によるリプレイ保護
+
+Nonce のリプレイ保護をインメモリの `Set` から **Upstash Redis** に移行しました。
+
+**変更内容：**
+
+- `lib/replay.ts` を `@upstash/redis` を使ったアトミックな `SET NX + TTL` で書き直し。
+- キー形式：`replay:137:{contractAddress}:{from}:{nonce}`（チェーン・コントラクト・送信元・nonce でスコープ分離）。
+- TTL は `validBefore` から自動算出。認可の有効期限と同時にキーが失効する。
+- `/api/verify` と `/api/settle` の両方で、オンチェーン `authorizationState` チェックの後に Redis でのnonceクレームを実施し、同時リクエストによる TOCTOU レースを防止。
+- Redis 障害時は **fail open**（オンチェーンの `authorizationState` が最終防衛ラインとして機能し続ける）。
+- `POST /api/verify` のレスポンスに `txHash` を復活。
+
+**新たに必要な環境変数：**
+
+```
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
+```
 
 ### 2026-04-15 — `GET /api/payment-info` エンドポイントを追加
 
