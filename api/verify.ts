@@ -14,6 +14,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { supabase } from "../lib/supabase";
+import { claimNonce } from "../lib/replay.js";
 
 const JPYC_ADDRESS: Address = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
 
@@ -236,6 +237,17 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Failed to check authorization state" }, 500);
   }
 
+  // Claim nonce in Redis (prevents TOCTOU between concurrent verify calls)
+  const claimed = await claimNonce({
+    contractAddress: JPYC_ADDRESS,
+    from: fromAddr,
+    nonce,
+    validBefore,
+  });
+  if (!claimed) {
+    return json({ error: "Authorization nonce already used (replay)" }, 400);
+  }
+
   // Split signature into v, r, s
   let v: number;
   let r: Hex;
@@ -247,21 +259,33 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: `Invalid signature: ${message}` }, 400);
   }
 
-  // Verify only — do not execute transaction
-  const now = new Date().toISOString();
+  // Execute transferWithAuthorization
+  try {
+    const txHash = await walletClient.writeContract({
+      address: JPYC_ADDRESS,
+      abi: EIP3009_ABI,
+      functionName: "transferWithAuthorization",
+      args: [fromAddr, toAddr, value, validAfter, validBefore, nonce, v, r, s],
+    });
 
-  // Log usage and update last_used_at in parallel
-  await Promise.all([
-    supabase.from("api_key_usage").insert({
-      api_key_id: keyRow.id,
-      event: "verify_success",
-      created_at: now,
-    }),
-    supabase
-      .from("api_keys")
-      .update({ last_used_at: now })
-      .eq("id", keyRow.id),
-  ]);
+    const now = new Date().toISOString();
 
-  return json({ isValid: true });
+    await Promise.all([
+      supabase.from("api_key_usage").insert({
+        api_key_id: keyRow.id,
+        event: "verify_success",
+        created_at: now,
+      }),
+      supabase
+        .from("api_keys")
+        .update({ last_used_at: now })
+        .eq("id", keyRow.id),
+    ]);
+
+    return json({ isValid: true, txHash });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[verify] transferWithAuthorization failed:", message);
+    return json({ error: "Internal server error" }, 500);
+  }
 }

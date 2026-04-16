@@ -9,7 +9,7 @@ import {
   parseAbi,
 } from "viem";
 import { getPolygonClient, POLYGON_NETWORK } from "./polygon.js";
-import { hasSettled, isFull, markSettled } from "./replay.js";
+import { claimNonce } from "./replay.js";
 
 export const JPYC_ADDRESS: Address =
   "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
@@ -151,12 +151,14 @@ export async function verifyJPYCPayment(
 
   // --- Replay protection ---
 
-  if (hasSettled(txHash)) {
+  const claimed = await claimNonce({
+    contractAddress: JPYC_ADDRESS,
+    from: paymentPayload.payload.from as Address,
+    nonce: txHash,
+    validBefore: 0n,
+  });
+  if (!claimed) {
     return invalid("transaction already used (replay)", txHash);
-  }
-
-  if (isFull()) {
-    return invalid("replay store capacity reached, rejecting new verifications", txHash);
   }
 
   // --- On-chain verification ---
@@ -196,9 +198,6 @@ export async function verifyJPYCPayment(
       txHash
     );
   }
-
-  // Mark as settled to prevent replay
-  markSettled(txHash);
 
   const block = await client.getBlock({
     blockNumber: receipt.blockNumber,

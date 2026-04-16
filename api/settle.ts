@@ -14,6 +14,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { supabase } from "../lib/supabase";
+import { claimNonce } from "../lib/replay.js";
 
 const JPYC_ADDRESS: Address = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
 
@@ -206,7 +207,7 @@ export default async function handler(req: Request): Promise<Response> {
   // Validate recipient matches DB recipient_address
   if (toAddr !== recipientAddress) {
     return json(
-      { error: "Authorization 'to' does not match registered recipient address" },
+      { error: "Authorization 'to' does not match registered payTo address" },
       400,
     );
   }
@@ -236,6 +237,17 @@ export default async function handler(req: Request): Promise<Response> {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[settle] authorizationState check failed:", message);
     return json({ error: "Failed to check authorization state" }, 500);
+  }
+
+  // Claim nonce in Redis (prevents TOCTOU between concurrent settle calls)
+  const claimed = await claimNonce({
+    contractAddress: JPYC_ADDRESS,
+    from: fromAddr,
+    nonce,
+    validBefore,
+  });
+  if (!claimed) {
+    return json({ error: "Authorization nonce already used (replay)" }, 400);
   }
 
   // Split signature into v, r, s

@@ -8,14 +8,12 @@ vi.mock("../polygon.js", () => ({
 
 // Mock replay store
 vi.mock("../replay.js", () => ({
-  hasSettled: vi.fn().mockReturnValue(false),
-  isFull: vi.fn().mockReturnValue(false),
-  markSettled: vi.fn(),
+  claimNonce: vi.fn().mockResolvedValue(true),
 }));
 
 import { verifyJPYCPayment, type VerifyRequest, JPYC_ADDRESS } from "../jpyc.js";
 import { getPolygonClient } from "../polygon.js";
-import { hasSettled, isFull, markSettled } from "../replay.js";
+import { claimNonce } from "../replay.js";
 import { encodeEventTopics, encodeAbiParameters, parseAbi, type Hash } from "viem";
 
 const VALID_FROM = "0x1111111111111111111111111111111111111111";
@@ -95,8 +93,7 @@ function mockClient(receipt: unknown, block?: unknown) {
 describe("verifyJPYCPayment", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(hasSettled).mockReturnValue(false);
-    vi.mocked(isFull).mockReturnValue(false);
+    vi.mocked(claimNonce).mockResolvedValue(true);
   });
 
   it("returns valid for a correct transfer", async () => {
@@ -170,7 +167,7 @@ describe("verifyJPYCPayment", () => {
   });
 
   it("rejects replay (same txHash used twice)", async () => {
-    vi.mocked(hasSettled).mockReturnValue(true);
+    vi.mocked(claimNonce).mockResolvedValue(false);
 
     const result = await verifyJPYCPayment(makeRequest());
     expect(result.isValid).toBe(false);
@@ -236,15 +233,7 @@ describe("verifyJPYCPayment", () => {
     expect(result.invalidReason).toContain("no JPYC transfer event");
   });
 
-  it("rejects when replay store is full", async () => {
-    vi.mocked(isFull).mockReturnValue(true);
-
-    const result = await verifyJPYCPayment(makeRequest());
-    expect(result.isValid).toBe(false);
-    expect(result.invalidReason).toContain("capacity reached");
-  });
-
-  it("marks txHash as settled after successful verification", async () => {
+  it("claims nonce after successful verification", async () => {
     mockClient({
       status: "success",
       blockNumber: 100n,
@@ -252,6 +241,11 @@ describe("verifyJPYCPayment", () => {
     });
 
     await verifyJPYCPayment(makeRequest());
-    expect(markSettled).toHaveBeenCalledWith(VALID_TX_HASH);
+    expect(claimNonce).toHaveBeenCalledWith({
+      contractAddress: JPYC_ADDRESS,
+      from: VALID_FROM,
+      nonce: VALID_TX_HASH,
+      validBefore: 0n,
+    });
   });
 });

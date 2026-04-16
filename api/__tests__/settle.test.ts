@@ -1,5 +1,28 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
+const mockSingle = vi.hoisted(() => vi.fn());
+const mockClaimNonce = vi.hoisted(() => vi.fn());
+
+vi.mock("../../lib/supabase.js", () => ({
+  supabase: {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            single: mockSingle,
+          }),
+        }),
+      }),
+      insert: () => Promise.resolve({ error: null }),
+      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+    }),
+  },
+}));
+
+vi.mock("../../lib/replay.js", () => ({
+  claimNonce: mockClaimNonce,
+}));
+
 // Mock viem modules before importing handler
 vi.mock("viem", async () => {
   const actual = await vi.importActual<typeof import("viem")>("viem");
@@ -92,6 +115,15 @@ describe("POST /api/settle (EIP-3009)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("API_KEY", "test-secret");
+    mockSingle.mockResolvedValue({
+      data: {
+        id: "key-id",
+        user_id: "user-id",
+        recipient_address: "0x2222222222222222222222222222222222222222",
+      },
+      error: null,
+    });
+    mockClaimNonce.mockResolvedValue(true);
   });
 
   it("returns 405 for non-POST methods", async () => {
@@ -107,6 +139,7 @@ describe("POST /api/settle (EIP-3009)", () => {
   });
 
   it("returns 401 when X-API-Key header is wrong", async () => {
+    mockSingle.mockResolvedValue({ data: null, error: "Not found" });
     const res = await handler(
       makeRequest({ method: "POST", apiKey: "wrong-key", body: {} }),
     );
