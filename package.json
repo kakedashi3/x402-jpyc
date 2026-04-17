@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "^1.46.0",
-    "@supabase/supabase-js": "^2.103.0",
+    "@supabase/supabase-js": "^2.103.3",
     "@upstash/redis": "^1.37.0",
     "bs58": "^6.0.0",
     "viem": "^2.47.12"
