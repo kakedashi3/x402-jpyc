@@ -20,7 +20,8 @@ import {
   padHex,
 } from "viem";
 import { polygon } from "viem/chains";
-import { JPYC_ADDRESS } from "../lib/jpyc.js";
+
+const JPYC_ADDRESS = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29" as const;
 
 const rpcUrl =
   process.env.POLYGON_RPC_URL || "https://polygon-bor-rpc.publicnode.com";

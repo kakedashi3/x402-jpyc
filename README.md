@@ -74,7 +74,7 @@ app.use(
   paymentMiddleware({
     facilitatorUrl: "https://x402-jpyc.vercel.app",
     paymentRequirements: {
-      scheme: "eip3009",
+      scheme: "exact",
       network: "eip155:137",
       asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC
       amount: "1000000000000000000", // 1 JPYC (18 decimals)
@@ -152,7 +152,7 @@ const response = await fetch("https://your-server.com/api/data", {
     "X-PAYMENT": JSON.stringify({
       paymentPayload: {
         x402Version: 1,
-        scheme: "eip3009",
+        scheme: "exact",
         network: "eip155:137",
         payload: {
           authorization: {
@@ -167,7 +167,7 @@ const response = await fetch("https://your-server.com/api/data", {
         },
       },
       paymentRequirements: {
-        scheme: "eip3009",
+        scheme: "exact",
         network: "eip155:137",
         asset: JPYC_ADDRESS,
         amount: amount.toString(),
@@ -204,7 +204,7 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
   -d '{
     "paymentPayload": {
       "x402Version": 1,
-      "scheme": "eip3009",
+      "scheme": "exact",
       "network": "eip155:137",
       "payload": {
         "authorization": {
@@ -219,7 +219,7 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
       }
     },
     "paymentRequirements": {
-      "scheme": "eip3009",
+      "scheme": "exact",
       "network": "eip155:137",
       "asset": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
       "amount": "1000000000000000000",
@@ -415,7 +415,7 @@ app.use(
   paymentMiddleware({
     facilitatorUrl: "https://x402-jpyc.vercel.app",
     paymentRequirements: {
-      scheme: "eip3009",
+      scheme: "exact",
       network: "eip155:137",
       asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC
       amount: "1000000000000000000", // 1 JPYC（18 decimals）
@@ -493,7 +493,7 @@ const response = await fetch("https://your-server.com/api/data", {
     "X-PAYMENT": JSON.stringify({
       paymentPayload: {
         x402Version: 1,
-        scheme: "eip3009",
+        scheme: "exact",
         network: "eip155:137",
         payload: {
           authorization: {
@@ -508,7 +508,7 @@ const response = await fetch("https://your-server.com/api/data", {
         },
       },
       paymentRequirements: {
-        scheme: "eip3009",
+        scheme: "exact",
         network: "eip155:137",
         asset: JPYC_ADDRESS,
         amount: amount.toString(),
@@ -545,7 +545,7 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
   -d '{
     "paymentPayload": {
       "x402Version": 1,
-      "scheme": "eip3009",
+      "scheme": "exact",
       "network": "eip155:137",
       "payload": {
         "authorization": {
@@ -560,7 +560,7 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
       }
     },
     "paymentRequirements": {
-      "scheme": "eip3009",
+      "scheme": "exact",
       "network": "eip155:137",
       "asset": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
       "amount": "1000000000000000000",

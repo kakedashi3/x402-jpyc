@@ -75,14 +75,14 @@ const validAuth = {
 const validBody = {
   paymentPayload: {
     x402Version: 1,
-    scheme: "eip3009",
+    scheme: "exact",
     network: "eip155:137",
     payload: {
       authorization: validAuth,
     },
   },
   paymentRequirements: {
-    scheme: "eip3009",
+    scheme: "exact",
     network: "eip155:137",
     asset: JPYC_ADDRESS,
     amount: "1000000000000000000",
