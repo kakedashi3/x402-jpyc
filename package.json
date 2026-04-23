@@ -16,7 +16,7 @@
     "@supabase/supabase-js": "^2.103.0",
     "@upstash/redis": "^1.37.0",
     "bs58": "^6.0.0",
-    "viem": "^2.47.12"
+    "viem": "^2.48.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
