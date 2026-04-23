@@ -45,42 +45,64 @@ Polygon Mainnet  →  JPYC transferred
 
 ## Facilitator Endpoints
 
+Short and `/api/*` forms both work (thanks to Vercel rewrites). Use either; the x402 SDK's default convention is the short form.
+
 ```
-POST https://x402-jpyc.vercel.app/api/verify        — validate payment authorization
-POST https://x402-jpyc.vercel.app/api/settle        — execute on-chain transfer
-GET  https://x402-jpyc.vercel.app/api/health        — health check
-GET  https://x402-jpyc.vercel.app/api/payment-info  — get recipient address for payTo
+POST https://x402-jpyc.vercel.app/verify          — validate payment authorization
+POST https://x402-jpyc.vercel.app/settle          — execute on-chain transfer
+GET  https://x402-jpyc.vercel.app/health          — health check
+GET  https://x402-jpyc.vercel.app/payment-info    — get recipient address for payTo
 ```
 
 ---
 
 ## Quick Start — Server Side
 
-Install the x402 middleware:
+Install the x402 v2 middleware:
 
 ```bash
-npm install x402-express viem
+npm install @x402/express @x402/core @x402/evm viem
 ```
 
 Set up an Express server that accepts JPYC payments:
 
 ```typescript
 import express from "express";
-import { paymentMiddleware } from "x402-express";
+import { paymentMiddleware, x402ResourceServer } from "@x402/express";
+import { HTTPFacilitatorClient } from "@x402/core/server";
+import { ExactEvmScheme } from "@x402/evm/exact/server";
 
 const app = express();
 
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: "https://x402-jpyc.vercel.app",
+});
+
+const server = new x402ResourceServer(facilitatorClient).register(
+  "eip155:137",
+  new ExactEvmScheme(),
+);
+
 app.use(
-  paymentMiddleware({
-    facilitatorUrl: "https://x402-jpyc.vercel.app",
-    paymentRequirements: {
-      scheme: "exact",
-      network: "eip155:137",
-      asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC
-      amount: "1000000000000000000", // 1 JPYC (18 decimals)
-      payTo: "0xYOUR_WALLET_ADDRESS",
+  paymentMiddleware(
+    {
+      "GET /api/data": {
+        accepts: [
+          {
+            scheme: "exact",
+            network: "eip155:137",
+            asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC
+            amount: "1000000000000000000", // 1 JPYC (18 decimals)
+            payTo: "0xYOUR_WALLET_ADDRESS",
+            extra: { name: "JPY Coin", version: "1" }, // EIP-712 domain
+          },
+        ],
+        description: "Paid data",
+        mimeType: "application/json",
+      },
     },
-  })
+    server,
+  ),
 );
 
 app.get("/api/data", (req, res) => {
@@ -151,7 +173,7 @@ const response = await fetch("https://your-server.com/api/data", {
   headers: {
     "X-PAYMENT": JSON.stringify({
       paymentPayload: {
-        x402Version: 1,
+        x402Version: 2,
         scheme: "exact",
         network: "eip155:137",
         payload: {
@@ -172,6 +194,7 @@ const response = await fetch("https://your-server.com/api/data", {
         asset: JPYC_ADDRESS,
         amount: amount.toString(),
         payTo: PAY_TO,
+        extra: { name: "JPY Coin", version: "1" },
       },
     }),
   },
@@ -203,7 +226,7 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
   -H "x-api-key: YOUR_API_KEY" \
   -d '{
     "paymentPayload": {
-      "x402Version": 1,
+      "x402Version": 2,
       "scheme": "exact",
       "network": "eip155:137",
       "payload": {
@@ -223,7 +246,8 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
       "network": "eip155:137",
       "asset": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
       "amount": "1000000000000000000",
-      "payTo": "0xRECIPIENT_ADDRESS"
+      "payTo": "0xRECIPIENT_ADDRESS",
+      "extra": { "name": "JPY Coin", "version": "1" }
     }
   }'
 ```
@@ -392,36 +416,64 @@ Polygon メインネット  →  JPYC 送金完了
 
 ## ファシリテーターエンドポイント
 
+短い URL と `/api/*` の両方が使えます（Vercel の rewrite 設定）。x402 SDK のデフォルト規約は短い URL です。
+
 ```
-POST https://x402-jpyc.vercel.app/api/verify        — 支払い認可の検証
-POST https://x402-jpyc.vercel.app/api/settle        — オンチェーン送金の実行
-GET  https://x402-jpyc.vercel.app/api/health        — ヘルスチェック
-GET  https://x402-jpyc.vercel.app/api/payment-info  — payTo に使う受取アドレスの取得
+POST https://x402-jpyc.vercel.app/verify          — 支払い認可の検証
+POST https://x402-jpyc.vercel.app/settle          — オンチェーン送金の実行
+GET  https://x402-jpyc.vercel.app/health          — ヘルスチェック
+GET  https://x402-jpyc.vercel.app/payment-info    — payTo に使う受取アドレスの取得
 ```
 
 ---
 
 ## クイックスタート（サーバー側）
 
+x402 v2 のミドルウェアをインストール：
+
+```bash
+npm install @x402/express @x402/core @x402/evm viem
+```
+
 JPYC で課金するサーバーの実装例：
 
 ```typescript
 import express from "express";
-import { paymentMiddleware } from "x402-express";
+import { paymentMiddleware, x402ResourceServer } from "@x402/express";
+import { HTTPFacilitatorClient } from "@x402/core/server";
+import { ExactEvmScheme } from "@x402/evm/exact/server";
 
 const app = express();
 
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: "https://x402-jpyc.vercel.app",
+});
+
+const server = new x402ResourceServer(facilitatorClient).register(
+  "eip155:137",
+  new ExactEvmScheme(),
+);
+
 app.use(
-  paymentMiddleware({
-    facilitatorUrl: "https://x402-jpyc.vercel.app",
-    paymentRequirements: {
-      scheme: "exact",
-      network: "eip155:137",
-      asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC
-      amount: "1000000000000000000", // 1 JPYC（18 decimals）
-      payTo: "0xYOUR_WALLET_ADDRESS",
+  paymentMiddleware(
+    {
+      "GET /api/data": {
+        accepts: [
+          {
+            scheme: "exact",
+            network: "eip155:137",
+            asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC
+            amount: "1000000000000000000", // 1 JPYC（18 decimals）
+            payTo: "0xYOUR_WALLET_ADDRESS",
+            extra: { name: "JPY Coin", version: "1" }, // EIP-712 domain
+          },
+        ],
+        description: "有料データ",
+        mimeType: "application/json",
+      },
     },
-  })
+    server,
+  ),
 );
 
 app.get("/api/data", (req, res) => {
@@ -492,7 +544,7 @@ const response = await fetch("https://your-server.com/api/data", {
   headers: {
     "X-PAYMENT": JSON.stringify({
       paymentPayload: {
-        x402Version: 1,
+        x402Version: 2,
         scheme: "exact",
         network: "eip155:137",
         payload: {
@@ -513,6 +565,7 @@ const response = await fetch("https://your-server.com/api/data", {
         asset: JPYC_ADDRESS,
         amount: amount.toString(),
         payTo: PAY_TO,
+        extra: { name: "JPY Coin", version: "1" },
       },
     }),
   },
@@ -544,7 +597,7 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
   -H "x-api-key: YOUR_API_KEY" \
   -d '{
     "paymentPayload": {
-      "x402Version": 1,
+      "x402Version": 2,
       "scheme": "exact",
       "network": "eip155:137",
       "payload": {
@@ -564,7 +617,8 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
       "network": "eip155:137",
       "asset": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
       "amount": "1000000000000000000",
-      "payTo": "0x受取先アドレス"
+      "payTo": "0x受取先アドレス",
+      "extra": { "name": "JPY Coin", "version": "1" }
     }
   }'
 ```

@@ -1,3 +1,9 @@
 {
-  "version": 2
+  "version": 2,
+  "rewrites": [
+    { "source": "/verify", "destination": "/api/verify" },
+    { "source": "/settle", "destination": "/api/settle" },
+    { "source": "/health", "destination": "/api/health" },
+    { "source": "/payment-info", "destination": "/api/payment-info" }
+  ]
 }

@@ -59,7 +59,7 @@ const validSignature = "0x" + "bb".repeat(65);
 
 const validBody = {
   paymentPayload: {
-    x402Version: 1,
+    x402Version: 2,
     scheme: "exact",
     network: "eip155:137",
     payload: {
@@ -73,6 +73,7 @@ const validBody = {
     asset: JPYC_ADDRESS,
     amount: "1000000000000000000",
     payTo: "0x2222222222222222222222222222222222222222",
+    extra: { name: "JPY Coin", version: "1" },
   },
 };
 
@@ -102,7 +103,11 @@ describe("POST /api/verify (EIP-3009)", () => {
     vi.clearAllMocks();
     vi.stubEnv("API_KEY", "test-secret");
     mockSingle.mockResolvedValue({
-      data: { id: "key-id", user_id: "user-id" },
+      data: {
+        id: "key-id",
+        user_id: "user-id",
+        recipient_address: "0x2222222222222222222222222222222222222222",
+      },
       error: null,
     });
     mockVerifyTypedData.mockResolvedValue(true);

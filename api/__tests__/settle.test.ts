@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 const mockSingle = vi.hoisted(() => vi.fn());
 const mockClaimNonce = vi.hoisted(() => vi.fn());
+const mockVerifyTypedData = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/supabase.js", () => ({
   supabase: {
@@ -30,6 +31,7 @@ vi.mock("viem", async () => {
     ...actual,
     createPublicClient: vi.fn(() => mockPublicClient),
     createWalletClient: vi.fn(() => mockWalletClient),
+    verifyTypedData: mockVerifyTypedData,
   };
 });
 
@@ -75,7 +77,7 @@ const validSignature = "0x" + "bb".repeat(65);
 
 const validBody = {
   paymentPayload: {
-    x402Version: 1,
+    x402Version: 2,
     scheme: "exact",
     network: "eip155:137",
     payload: {
@@ -89,6 +91,7 @@ const validBody = {
     asset: JPYC_ADDRESS,
     amount: "1000000000000000000",
     payTo: "0x2222222222222222222222222222222222222222",
+    extra: { name: "JPY Coin", version: "1" },
   },
 };
 
@@ -126,6 +129,7 @@ describe("POST /api/settle (EIP-3009)", () => {
       error: null,
     });
     mockClaimNonce.mockResolvedValue(true);
+    mockVerifyTypedData.mockResolvedValue(true);
   });
 
   it("returns 405 for non-POST methods", async () => {

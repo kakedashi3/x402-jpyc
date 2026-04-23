@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "build": "tsc",
-    "dev": "ts-node api/health.ts",
+    "dev": "vercel dev",
     "deploy": "vercel --prod",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
