@@ -155,6 +155,7 @@ const response = await fetch("https://your-server.com/api/data", {
         scheme: "exact",
         network: "eip155:137",
         payload: {
+          signature,
           authorization: {
             from: account.address,
             to: PAY_TO,
@@ -162,7 +163,6 @@ const response = await fetch("https://your-server.com/api/data", {
             validAfter: validAfter.toString(),
             validBefore: validBefore.toString(),
             nonce,
-            signature,
           },
         },
       },
@@ -207,14 +207,14 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
       "scheme": "exact",
       "network": "eip155:137",
       "payload": {
+        "signature": "0xEIP712_SIGNATURE",
         "authorization": {
           "from": "0xSENDER_ADDRESS",
           "to": "0xRECIPIENT_ADDRESS",
           "value": "1000000000000000000",
           "validAfter": "0",
           "validBefore": "1800000000",
-          "nonce": "0xRANDOM_BYTES32",
-          "signature": "0xEIP712_SIGNATURE"
+          "nonce": "0xRANDOM_BYTES32"
         }
       }
     },
@@ -496,6 +496,7 @@ const response = await fetch("https://your-server.com/api/data", {
         scheme: "exact",
         network: "eip155:137",
         payload: {
+          signature,
           authorization: {
             from: account.address,
             to: PAY_TO,
@@ -503,7 +504,6 @@ const response = await fetch("https://your-server.com/api/data", {
             validAfter: validAfter.toString(),
             validBefore: validBefore.toString(),
             nonce,
-            signature,
           },
         },
       },
@@ -548,14 +548,14 @@ curl -X POST https://x402-jpyc.vercel.app/api/verify \
       "scheme": "exact",
       "network": "eip155:137",
       "payload": {
+        "signature": "0xEIP712署名",
         "authorization": {
           "from": "0x送信元アドレス",
           "to": "0x受取先アドレス",
           "value": "1000000000000000000",
           "validAfter": "0",
           "validBefore": "1800000000",
-          "nonce": "0xランダムBYTES32",
-          "signature": "0xEIP712署名"
+          "nonce": "0xランダムBYTES32"
         }
       }
     },

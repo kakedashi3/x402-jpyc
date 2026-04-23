@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 const mockSingle = vi.hoisted(() => vi.fn());
-const mockClaimNonce = vi.hoisted(() => vi.fn());
+const mockVerifyTypedData = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/supabase.js", () => ({
   supabase: {
@@ -19,37 +19,21 @@ vi.mock("../../lib/supabase.js", () => ({
   },
 }));
 
-vi.mock("../../lib/replay.js", () => ({
-  claimNonce: mockClaimNonce,
-}));
-
 // Mock viem modules before importing handler
 vi.mock("viem", async () => {
   const actual = await vi.importActual<typeof import("viem")>("viem");
   return {
     ...actual,
     createPublicClient: vi.fn(() => mockPublicClient),
-    createWalletClient: vi.fn(() => mockWalletClient),
+    verifyTypedData: mockVerifyTypedData,
   };
 });
-
-vi.mock("viem/accounts", () => ({
-  privateKeyToAccount: vi.fn(() => ({
-    address: "0xFacilitator0000000000000000000000000000",
-    signTransaction: vi.fn(),
-  })),
-}));
 
 const mockPublicClient = {
   readContract: vi.fn(),
 };
 
-const mockWalletClient = {
-  writeContract: vi.fn(),
-};
-
 // Stub env before importing handler
-vi.stubEnv("FACILITATOR_PRIVATE_KEY", "0x" + "ab".repeat(32));
 vi.stubEnv("POLYGON_RPC_URL", "https://fake-rpc.test");
 vi.stubEnv("API_KEY", "test-secret");
 
@@ -69,8 +53,9 @@ const validAuth = {
   validAfter: "0",
   validBefore: String(Math.floor(Date.now() / 1000) + 3600),
   nonce: "0x" + "aa".repeat(32),
-  signature: "0x" + "bb".repeat(65),
 };
+
+const validSignature = "0x" + "bb".repeat(65);
 
 const validBody = {
   paymentPayload: {
@@ -78,6 +63,7 @@ const validBody = {
     scheme: "exact",
     network: "eip155:137",
     payload: {
+      signature: validSignature,
       authorization: validAuth,
     },
   },
@@ -119,7 +105,7 @@ describe("POST /api/verify (EIP-3009)", () => {
       data: { id: "key-id", user_id: "user-id" },
       error: null,
     });
-    mockClaimNonce.mockResolvedValue(true);
+    mockVerifyTypedData.mockResolvedValue(true);
   });
 
   it("returns 405 for non-POST methods", async () => {
@@ -203,11 +189,8 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(data.error).toContain("payTo");
   });
 
-  it("returns 200 with txHash on success", async () => {
+  it("returns 200 with isValid and payer on success", async () => {
     mockPublicClient.readContract.mockResolvedValue(false); // nonce not used
-    mockWalletClient.writeContract.mockResolvedValue(
-      "0xdeadbeef" as `0x${string}`,
-    );
 
     const res = await handler(
       makeRequest({ apiKey: "test-secret", body: validBody }),
@@ -215,7 +198,8 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(res.status).toBe(200);
     const data: any = await res.json();
     expect(data.isValid).toBe(true);
-    expect(data.txHash).toBe("0xdeadbeef");
+    expect(data.payer).toBe("0x1111111111111111111111111111111111111111");
+    expect(data.txHash).toBeUndefined();
   });
 
   it("returns 500 when authorizationState RPC call fails", async () => {
@@ -229,18 +213,16 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(data.error).toContain("authorization state");
   });
 
-  it("returns 500 when transferWithAuthorization fails", async () => {
+  it("returns 400 when signature does not match from", async () => {
     mockPublicClient.readContract.mockResolvedValue(false);
-    mockWalletClient.writeContract.mockRejectedValue(
-      new Error("execution reverted: ECRecover failed"),
-    );
+    mockVerifyTypedData.mockResolvedValue(false);
 
     const res = await handler(
       makeRequest({ apiKey: "test-secret", body: validBody }),
     );
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
     const data: any = await res.json();
-    expect(data.error).toBe("Internal server error");
+    expect(data.error).toContain("Signature");
     expect(data.isValid).toBeUndefined();
   });
 });

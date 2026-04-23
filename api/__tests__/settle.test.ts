@@ -69,8 +69,9 @@ const validAuth = {
   validAfter: "0",
   validBefore: String(Math.floor(Date.now() / 1000) + 3600),
   nonce: "0x" + "aa".repeat(32),
-  signature: "0x" + "bb".repeat(65),
 };
+
+const validSignature = "0x" + "bb".repeat(65);
 
 const validBody = {
   paymentPayload: {
@@ -78,6 +79,7 @@ const validBody = {
     scheme: "exact",
     network: "eip155:137",
     payload: {
+      signature: validSignature,
       authorization: validAuth,
     },
   },

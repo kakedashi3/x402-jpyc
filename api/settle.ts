@@ -56,7 +56,6 @@ interface Authorization {
   validAfter: string;
   validBefore: string;
   nonce: string; // bytes32 hex
-  signature: string; // 65-byte hex (r + s + v)
 }
 
 interface SettleRequestBody {
@@ -65,6 +64,7 @@ interface SettleRequestBody {
     scheme: string;
     network: string;
     payload: {
+      signature: string; // 65-byte hex (r + s + v)
       authorization: Authorization;
     };
   };
@@ -156,11 +156,12 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const auth = paymentPayload.payload.authorization;
+  const signature = paymentPayload.payload.signature;
 
-  // Validate required authorization fields
-  if (!auth.from || !auth.to || !auth.value || !auth.nonce || !auth.signature) {
+  // Validate required fields
+  if (!auth.from || !auth.to || !auth.value || !auth.nonce || !signature) {
     return json(
-      { error: "Missing authorization fields: from, to, value, nonce, signature are required" },
+      { error: "Missing fields: from, to, value, nonce, and payload.signature are required" },
       400,
     );
   }
@@ -255,7 +256,7 @@ export default async function handler(req: Request): Promise<Response> {
   let r: Hex;
   let s: Hex;
   try {
-    ({ v, r, s } = splitSignature(auth.signature as Hex));
+    ({ v, r, s } = splitSignature(signature as Hex));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return json({ error: `Invalid signature: ${message}` }, 400);
