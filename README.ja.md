@@ -3,30 +3,30 @@
 
 # x402-jpyc
 
-x402 facilitator for JPYC (JPY Coin) on Polygon. Lets HTTP APIs charge in JPYC and lets clients pay with an EIP-3009 signed authorization.
+Polygon 上の JPYC (JPY Coin) で動く x402 ファシリテーター。HTTP API が JPYC で課金でき、クライアントは EIP-3009 署名された認可で支払えます。
 
-[日本語版 README](./README.ja.md)
+[English README](./README.md)
 
-## Endpoints
+## エンドポイント
 
-Hosted at `https://x402-jpyc.vercel.app`. Both the short form and the `/api/*` form work (Vercel rewrites).
+ホスト先: `https://x402-jpyc.vercel.app`。短い形式と `/api/*` 形式の両方が使えます（Vercel rewrites）。
 
-| Method | Path | Purpose |
+| Method | Path | 用途 |
 |---|---|---|
-| `POST` | `/verify` | Validate an EIP-3009 payment authorization |
-| `POST` | `/settle` | Validate, then submit `transferWithAuthorization` on-chain |
-| `GET`  | `/health` | Health check |
-| `GET`  | `/payment-info` | Return the recipient address bound to the API key |
+| `POST` | `/verify` | EIP-3009 認可データの検証 |
+| `POST` | `/settle` | 検証後、`transferWithAuthorization` をオンチェーン送信 |
+| `GET`  | `/health` | ヘルスチェック |
+| `GET`  | `/payment-info` | API キーに紐づく受取アドレスを取得 |
 
-## Quick Start — Server
+## クイックスタート — サーバー側
 
-Install the x402 v2 middleware:
+x402 v2 ミドルウェアをインストール：
 
 ```bash
 npm install @x402/express @x402/core @x402/evm viem
 ```
 
-Accept JPYC payments on an Express route:
+Express ルートで JPYC 支払いを受け付ける：
 
 ```typescript
 import express from "express";
@@ -54,7 +54,7 @@ app.use(
             scheme: "exact",
             network: "eip155:137",
             asset: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29", // JPYC (JPY Coin)
-            amount: "1000000000000000000", // 1 JPYC (18 decimals)
+            amount: "1000000000000000000", // 1 JPYC（18 decimals）
             payTo: "0xYOUR_WALLET_ADDRESS",
             extra: {
               assetTransferMethod: "eip3009",
@@ -63,7 +63,7 @@ app.use(
             },
           },
         ],
-        description: "Paid data",
+        description: "有料データ",
         mimeType: "application/json",
       },
     },
@@ -72,15 +72,15 @@ app.use(
 );
 
 app.get("/api/data", (req, res) => {
-  res.json({ message: "Paid content delivered" });
+  res.json({ message: "有料コンテンツを配信しました" });
 });
 
 app.listen(3000);
 ```
 
-## Quick Start — Client
+## クイックスタート — クライアント側
 
-Sign an EIP-3009 authorization with viem and call the paid API:
+viem で EIP-3009 認可に署名し、有料 API を呼び出す：
 
 ```typescript
 import { createWalletClient, http, parseUnits, toHex } from "viem";
@@ -99,7 +99,7 @@ const client = createWalletClient({
 
 const amount = parseUnits("1", 18); // 1 JPYC
 const validAfter = 0n;
-const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour
+const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1時間
 const nonce = toHex(crypto.getRandomValues(new Uint8Array(32)));
 
 const signature = await client.signTypedData({
@@ -168,11 +168,11 @@ const response = await fetch("https://your-server.com/api/data", {
 console.log(await response.json());
 ```
 
-## API Reference
+## API リファレンス
 
 ### `POST /verify`
 
-Validates a payment authorization. Does not broadcast.
+支払い認可を検証する。ブロードキャストはしない。
 
 ```bash
 curl -X POST https://x402-jpyc.vercel.app/verify \
@@ -210,7 +210,7 @@ curl -X POST https://x402-jpyc.vercel.app/verify \
   }'
 ```
 
-Response:
+レスポンス：
 
 ```json
 { "isValid": true, "payer": "0xSENDER_ADDRESS" }
@@ -218,9 +218,9 @@ Response:
 
 ### `POST /settle`
 
-Validates, then submits `transferWithAuthorization` on Polygon. Same request body as `/verify`.
+検証したうえで Polygon 上に `transferWithAuthorization` を送信する。リクエストボディは `/verify` と同じ。
 
-Response:
+レスポンス：
 
 ```json
 { "success": true, "txHash": "0x...", "network": "eip155:137" }
@@ -228,7 +228,7 @@ Response:
 
 ### `GET /payment-info`
 
-Returns the recipient address registered for the API key.
+API キーに登録された受取アドレスを返す。
 
 ```bash
 curl https://x402-jpyc.vercel.app/payment-info \
@@ -255,49 +255,49 @@ curl https://x402-jpyc.vercel.app/payment-info \
 }
 ```
 
-## Configuration
+## 環境変数
 
-| Variable | Required | Description |
+| 変数 | 必須 | 説明 |
 |---|---|---|
-| `FACILITATOR_PRIVATE_KEY` | Yes | Wallet private key used to broadcast `transferWithAuthorization` |
-| `POLYGON_RPC_URL` | Yes | Polygon RPC endpoint (Alchemy / QuickNode recommended) |
-| `SUPABASE_URL` | Yes | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server-side only) |
-| `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST URL for nonce replay protection |
-| `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis REST token |
+| `FACILITATOR_PRIVATE_KEY` | Yes | `transferWithAuthorization` をブロードキャストするウォレット秘密鍵 |
+| `POLYGON_RPC_URL` | Yes | Polygon RPC エンドポイント（Alchemy / QuickNode 推奨） |
+| `SUPABASE_URL` | Yes | Supabase プロジェクト URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase サービスロールキー（サーバーサイド専用） |
+| `UPSTASH_REDIS_REST_URL` | Yes | nonce リプレイ保護用の Upstash Redis REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis REST トークン |
 
-## API Key Management
+## API キー管理
 
-API keys live in a Supabase `api_keys` table:
+API キーは Supabase の `api_keys` テーブルで管理：
 
-| Column | Description |
+| カラム | 説明 |
 |---|---|
-| `api_key_hash` | SHA-256 hash of the raw key (the raw key is never stored) |
-| `api_key_prefix` | First few characters of the key for display |
-| `recipient_address` | On-chain address that receives JPYC payments for this key |
-| `is_active` | Toggle to revoke without deleting |
+| `api_key_hash` | 生キーの SHA-256 ハッシュ（生キーは保存しない） |
+| `api_key_prefix` | 表示用のキー先頭数文字 |
+| `recipient_address` | このキーで受け取る JPYC のオンチェーンアドレス |
+| `is_active` | 削除せずに無効化できる |
 
-The `x-api-key` header is hashed on each request and matched against `api_key_hash`. The destination of every transfer is the `recipient_address` registered for that key — the caller cannot override it.
+リクエストごとに `x-api-key` ヘッダー値をハッシュ化して `api_key_hash` と照合する。送金先は API キーに登録された `recipient_address` が使われ、呼び出し元から指定できない。
 
 ## Notes
 
-- JPYC (JPY Coin) settlement uses EIP-3009 `transferWithAuthorization(...)`.
-- The facilitator is the relayer; the payer signs an EIP-712 typed authorization off-chain.
-- EIP-712 domain: `name: "JPY Coin"`, `version: "1"`, `chainId: 137`.
-- Nonce replay protection: atomic `SET NX + TTL` in Upstash Redis, scoped by `chain:contract:from:nonce`. The TTL is derived from `validBefore`. On Redis unavailability the service fails open and the on-chain `authorizationState` check remains the final guard.
-- `/settle` returns `txHash` immediately after broadcast.
-- Runtime: Vercel Edge Functions.
+- JPYC (JPY Coin) の決済は EIP-3009 `transferWithAuthorization(...)` を使う。
+- ファシリテーターはリレーヤーで、支払い者は EIP-712 typed data にオフチェーン署名する。
+- EIP-712 ドメイン: `name: "JPY Coin"`, `version: "1"`, `chainId: 137`。
+- nonce リプレイ保護は Upstash Redis での atomic な `SET NX + TTL`。キースコープは `chain:contract:from:nonce`、TTL は `validBefore` から算出。Redis 障害時は fail open し、オンチェーンの `authorizationState` チェックが最終防衛ラインとして機能し続ける。
+- `/settle` はブロードキャスト直後に `txHash` を返す。
+- ランタイム: Vercel Edge Functions。
 
-## Example settlement
+## 決済例
 
 [Polygonscan: 0x35c00930…3432b8c8f](https://polygonscan.com/tx/0x35c00930d65a47dc00c86f686df9175ed1b1c4db731687acac2658e3432b8c8f)
 
-| Field | Value |
+| 項目 | 値 |
 |---|---|
-| tx hash | `0x35c00930d65a47dc00c86f686df9175ed1b1c4db731687acac2658e3432b8c8f` |
-| Block | 85338927 |
-| Network | Polygon mainnet |
+| tx ハッシュ | `0x35c00930d65a47dc00c86f686df9175ed1b1c4db731687acac2658e3432b8c8f` |
+| ブロック | 85338927 |
+| ネットワーク | Polygon メインネット |
 
-## License
+## ライセンス
 
 MIT

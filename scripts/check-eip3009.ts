@@ -232,15 +232,11 @@ async function main() {
   console.log();
 
   const eip3009 = transferOk && authStateOk;
-  console.log(`  → EIP-3009対応: ${eip3009 ? "YES" : "NO"}`);
+  console.log(`  → EIP-3009: ${eip3009 ? "YES" : "NO"}`);
+  console.log("  → x402 'exact' scheme available");
 
-  if (eip3009) {
-    console.log("  → x402 'exact' scheme が利用可能");
-  } else {
-    console.log("  → x402 'exact' scheme は利用不可");
-    console.log(
-      "  → 'evm-erc20-transfer' scheme (Transfer event 検証) を使用してください",
-    );
+  if (!eip3009) {
+    process.exit(1);
   }
 }
 
