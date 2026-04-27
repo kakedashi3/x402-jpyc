@@ -44,8 +44,12 @@ const publicClient = _rpcUrl
   ? createPublicClient({ chain: polygon, transport: http(_rpcUrl) })
   : null;
 
-function json(data: unknown, status = 200): Response {
-  return Response.json(data, { status });
+function json(
+  data: unknown,
+  status = 200,
+  headers?: Record<string, string>,
+): Response {
+  return Response.json(data, { status, headers });
 }
 
 async function hashApiKey(apiKey: string): Promise<string> {
@@ -101,14 +105,26 @@ export default async function handler(req: Request): Promise<Response> {
   const { fromAddr, value, validAfter, validBefore, nonce, signature } =
     result.payment;
 
-  // Claim nonce in Redis (prevents TOCTOU between concurrent settle calls)
-  const claimed = await claimNonce({
+  // Claim nonce in Redis (prevents TOCTOU between concurrent settle calls).
+  // Default fail-closed: if Redis is unreachable, return 503 so the caller
+  // can retry rather than risk a double broadcast. Operators can opt into
+  // legacy fail-open via REPLAY_FAIL_OPEN=true.
+  const claim = await claimNonce({
     contractAddress: JPYC.ADDRESS,
     from: fromAddr,
     nonce,
     validBefore,
   });
-  if (!claimed) {
+  if (!claim.ok) {
+    if (claim.mode === "fail_closed") {
+      return json(
+        {
+          error: "Replay-protection store unavailable; please retry",
+          code: "service_unavailable",
+        },
+        503,
+      );
+    }
     return json(
       {
         error: "Authorization nonce already used (replay)",
@@ -117,6 +133,7 @@ export default async function handler(req: Request): Promise<Response> {
       400,
     );
   }
+  const replayHeader = claim.mode === "fail_open" ? "degraded" : "normal";
 
   let v: number;
   let r: Hex;
@@ -176,7 +193,11 @@ export default async function handler(req: Request): Promise<Response> {
         .eq("id", keyRow.id),
     ]);
 
-    return json({ success: true, txHash, network: JPYC.NETWORK });
+    return json(
+      { success: true, txHash, network: JPYC.NETWORK },
+      200,
+      { "X-Replay-Protection": replayHeader },
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[settle] transferWithAuthorization failed:", message);

@@ -193,7 +193,22 @@ The simulation has a hard 3-second timeout. On timeout the response is `503 simu
 - Operation: `SET <key> "1" EX <ttl> NX`
 - Key: `replay:137:<contract_lowercase>:<from_lowercase>:<nonce_lowercase>`
 - TTL: `max(validBefore - now, 1)` seconds when `validBefore > 0`, else `86400`
-- On Redis error or missing config: fail open. The on-chain `authorizationState` check remains the authoritative replay guard.
+- On transaction revert the key is **not** released (fail-safe).
+
+### Failure mode
+
+| `REPLAY_FAIL_OPEN` | Redis state | `claimNonce` returns | `/settle` response |
+|---|---|---|---|
+| unset / `false` | reachable, key new | `{ok:true, mode:"normal"}` | 200 + `X-Replay-Protection: normal` |
+| unset / `false` | reachable, key exists | `{ok:false, mode:"normal"}` | 400 `nonce_already_used` |
+| unset / `false` | unreachable / unconfigured | `{ok:false, mode:"fail_closed"}` | 503 `service_unavailable` (retriable) |
+| `true` | unreachable / unconfigured | `{ok:true, mode:"fail_open"}` | 200 + `X-Replay-Protection: degraded` |
+
+Default is **fail-closed**: if the replay store is down, `/settle` refuses to broadcast and returns 503 so the caller can retry. Operators who would rather keep accepting payments during a Redis outage can opt into the legacy fail-open path with `REPLAY_FAIL_OPEN=true`; in that mode every degraded settle is logged via `console.error` and the response carries `X-Replay-Protection: degraded`.
+
+#### Why fail-closed by default
+
+The on-chain `authorizationState` check is the final replay guard, but it cannot prevent a brief window of double-broadcast: under Edge cold-start contention plus a Redis outage, two concurrent `/settle` calls can both pass `authorizationState=false` and both submit transactions. Only one lands; the other reverts and consumes facilitator gas. For a payments SaaS, "settlement temporarily unavailable" is more acceptable than "we burned MATIC on a duplicate broadcast", so we fail-closed by default and let the operator opt out.
 
 ## Error Responses
 

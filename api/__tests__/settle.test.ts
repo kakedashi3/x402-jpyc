@@ -128,7 +128,7 @@ describe("POST /api/settle (EIP-3009)", () => {
       },
       error: null,
     });
-    mockClaimNonce.mockResolvedValue(true);
+    mockClaimNonce.mockResolvedValue({ ok: true, mode: "normal" });
     mockVerifyTypedData.mockResolvedValue(true);
   });
 
@@ -223,10 +223,45 @@ describe("POST /api/settle (EIP-3009)", () => {
       makeRequest({ apiKey: "test-secret", body: validBody }),
     );
     expect(res.status).toBe(200);
+    expect(res.headers.get("X-Replay-Protection")).toBe("normal");
     const data: any = await res.json();
     expect(data.success).toBe(true);
     expect(data.txHash).toBe("0xdeadbeef");
     expect(data.network).toBe("eip155:137");
+  });
+
+  it("returns 503 when claimNonce returns fail_closed (Redis outage)", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockClaimNonce.mockResolvedValue({
+      ok: false,
+      mode: "fail_closed",
+      error: "Redis unreachable",
+    });
+
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: validBody }),
+    );
+    expect(res.status).toBe(503);
+    const data: any = await res.json();
+    expect(data.code).toBe("service_unavailable");
+  });
+
+  it("includes X-Replay-Protection: degraded when fail-open is used", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockClaimNonce.mockResolvedValue({
+      ok: true,
+      mode: "fail_open",
+      error: "Redis unreachable",
+    });
+    mockWalletClient.writeContract.mockResolvedValue(
+      "0xdeadbeef" as `0x${string}`,
+    );
+
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: validBody }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Replay-Protection")).toBe("degraded");
   });
 
   it("returns 500 when transferWithAuthorization fails", async () => {
