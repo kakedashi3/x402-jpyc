@@ -5,3 +5,4 @@ node_modules/
 *.tsbuildinfo
 # Compiled output
 dist
+coverage
