@@ -110,7 +110,9 @@ function makePayment(overrides: Partial<ValidatedPayment> = {}): ValidatedPaymen
     validAfter: 0n,
     validBefore: nowSec() + 3600n,
     nonce: NONCE_A,
-    signature: ("0x" + "bb".repeat(65)) as Hex,
+    // Last byte 0x1c (v=28) so viem.parseSignature accepts it; tests
+    // exercising downstream RPC calls then run as intended.
+    signature: ("0x" + "bb".repeat(64) + "1c") as Hex,
     ...overrides,
   };
 }

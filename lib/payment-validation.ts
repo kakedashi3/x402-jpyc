@@ -1,6 +1,7 @@
 import {
   getAddress,
   parseAbi,
+  parseSignature,
   verifyTypedData,
   type Address,
   type Hex,
@@ -147,22 +148,29 @@ export function isValidNonceFormat(nonce: unknown): nonce is Hex {
   return typeof nonce === "string" && NONCE_HEX_REGEX.test(nonce);
 }
 
+/**
+ * Split a 65-byte EIP-3009 signature into the (v, r, s) tuple expected
+ * by `transferWithAuthorization`. Backed by viem's `parseSignature`,
+ * which canonicalizes legacy v=0/1 → yParity and decodes EIP-2098
+ * compact 64-byte forms.
+ *
+ * Always returns v as 27 or 28 (EIP-3009's contract takes uint8 v).
+ * Throws with a "signature length" / "signature" message on malformed
+ * input so callers can surface a stable `invalid_signature` code.
+ */
 export function splitEip3009Signature(sig: Hex): {
   v: number;
   r: Hex;
   s: Hex;
 } {
-  const raw = sig.startsWith("0x") ? sig.slice(2) : sig;
-  if (raw.length !== 130) {
-    throw new Error(
-      `Invalid signature length: expected 130 hex chars, got ${raw.length}`,
-    );
+  let parsed;
+  try {
+    parsed = parseSignature(sig);
+  } catch (err) {
+    const inner = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid signature length or format: ${inner}`);
   }
-  const r = `0x${raw.slice(0, 64)}` as Hex;
-  const s = `0x${raw.slice(64, 128)}` as Hex;
-  let v = parseInt(raw.slice(128, 130), 16);
-  if (v < 27) v += 27;
-  return { v, r, s };
+  return { v: 27 + parsed.yParity, r: parsed.r, s: parsed.s };
 }
 
 export async function validatePayment(

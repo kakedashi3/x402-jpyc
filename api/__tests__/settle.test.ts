@@ -73,7 +73,8 @@ const validAuth = {
   nonce: "0x" + "aa".repeat(32),
 };
 
-const validSignature = "0x" + "bb".repeat(65);
+// Last byte 0x1c (v=28) so viem.parseSignature accepts it.
+const validSignature = "0x" + "bb".repeat(64) + "1c";
 
 const validBody = {
   paymentPayload: {
