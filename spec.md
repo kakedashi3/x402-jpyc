@@ -180,6 +180,31 @@ On-chain pre-flight (`simulateTransferWithAuthorization`, run by `/verify`):
 
 The simulation has a hard 3-second timeout. On timeout the response is `503 simulation_timeout`, not a 4xx — a flaky RPC must not be reported as a malformed authorization.
 
+## Amount validation policy
+
+The facilitator accepts payments where:
+
+```
+authorization.value >= paymentRequirements.amount
+```
+
+| `value` vs `amount` | Result |
+|---|---|
+| `value == amount` | accepted (exact match) |
+| `value > amount` | accepted (overpayment, no refund) |
+| `value < amount` | rejected with `code: invalid_amount` |
+| either is `0` or non-positive | rejected with `code: invalid_amount` |
+
+### Rationale
+
+- Aligns with x402 v2 conventions.
+- Supports bundling: a single authorization can cover multiple resources whose summed price ≤ `value`.
+- Overpayment is treated as the buyer's deliberate choice; the facilitator does not refund.
+
+### Difference from `jpyc-x402` reference facilitator
+
+The `jpyc-x402` reference facilitator requires an exact match (`value == amount`). `x402-jpyc` deliberately diverges to accept overpayment for v2 compatibility. Clients written against `jpyc-x402` keep working unchanged; clients that exploit overpayment will not work against `jpyc-x402`.
+
 ## Authentication
 
 - Header: `x-api-key`
