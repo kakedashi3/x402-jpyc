@@ -22,6 +22,10 @@ const AUTH_STATE_ABI = parseAbi([
   "function authorizationState(address authorizer, bytes32 nonce) view returns (bool)",
 ]);
 
+export const TRANSFER_WITH_AUTHORIZATION_ABI = parseAbi([
+  "function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)",
+]);
+
 const EIP712_DOMAIN = {
   name: JPYC.EIP712_NAME,
   version: JPYC.EIP712_VERSION,
@@ -39,6 +43,27 @@ const EIP712_TYPES = {
     { name: "nonce", type: "bytes32" },
   ],
 } as const;
+
+export type PaymentErrorCode =
+  | "invalid_request"
+  | "invalid_signature"
+  | "invalid_chain_id"
+  | "invalid_pay_to"
+  | "invalid_amount"
+  | "invalid_asset"
+  | "invalid_scheme"
+  | "invalid_network"
+  | "invalid_x402_version"
+  | "invalid_extra"
+  | "invalid_address"
+  | "authorization_expired"
+  | "authorization_not_yet_valid"
+  | "nonce_already_used"
+  | "invalid_nonce_format"
+  | "simulation_failed"
+  | "simulation_timeout"
+  | "facilitator_insufficient_native_balance"
+  | "rpc_unavailable";
 
 interface Authorization {
   from?: string;
@@ -84,10 +109,60 @@ export interface ValidatedPayment {
 
 export type ValidationResult =
   | { ok: true; payment: ValidatedPayment }
-  | { ok: false; status: number; error: string };
+  | {
+      ok: false;
+      status: number;
+      code: PaymentErrorCode;
+      error: string;
+    };
 
-function fail(status: number, error: string): ValidationResult {
-  return { ok: false, status, error };
+export type SimulationResult =
+  | { ok: true; gasEstimate: bigint }
+  | {
+      ok: false;
+      status: number;
+      code: PaymentErrorCode;
+      error: string;
+    };
+
+function fail(
+  status: number,
+  code: PaymentErrorCode,
+  error: string,
+): ValidationResult {
+  return { ok: false, status, code, error };
+}
+
+function simFail(
+  status: number,
+  code: PaymentErrorCode,
+  error: string,
+): SimulationResult {
+  return { ok: false, status, code, error };
+}
+
+const NONCE_HEX_REGEX = /^0x[0-9a-fA-F]{64}$/;
+
+export function isValidNonceFormat(nonce: unknown): nonce is Hex {
+  return typeof nonce === "string" && NONCE_HEX_REGEX.test(nonce);
+}
+
+export function splitEip3009Signature(sig: Hex): {
+  v: number;
+  r: Hex;
+  s: Hex;
+} {
+  const raw = sig.startsWith("0x") ? sig.slice(2) : sig;
+  if (raw.length !== 130) {
+    throw new Error(
+      `Invalid signature length: expected 130 hex chars, got ${raw.length}`,
+    );
+  }
+  const r = `0x${raw.slice(0, 64)}` as Hex;
+  const s = `0x${raw.slice(64, 128)}` as Hex;
+  let v = parseInt(raw.slice(128, 130), 16);
+  if (v < 27) v += 27;
+  return { v, r, s };
 }
 
 export async function validatePayment(
@@ -100,24 +175,31 @@ export async function validatePayment(
   if (!paymentPayload?.payload?.authorization || !paymentRequirements) {
     return fail(
       400,
+      "invalid_request",
       "Missing required fields: paymentPayload.payload.authorization, paymentRequirements",
     );
   }
 
   const version = paymentPayload.x402Version;
   if (typeof version !== "number" || !SUPPORTED_X402_VERSIONS.has(version)) {
-    return fail(400, `Unsupported x402Version: ${version} (expected 1 or 2)`);
+    return fail(
+      400,
+      "invalid_x402_version",
+      `Unsupported x402Version: ${version} (expected 1 or 2)`,
+    );
   }
 
   if (paymentPayload.scheme !== JPYC.SCHEME) {
     return fail(
       400,
+      "invalid_scheme",
       `Unsupported paymentPayload.scheme: ${paymentPayload.scheme} (expected ${JPYC.SCHEME})`,
     );
   }
   if (paymentRequirements.scheme !== JPYC.SCHEME) {
     return fail(
       400,
+      "invalid_scheme",
       `Unsupported paymentRequirements.scheme: ${paymentRequirements.scheme} (expected ${JPYC.SCHEME})`,
     );
   }
@@ -125,12 +207,14 @@ export async function validatePayment(
   if (paymentPayload.network !== JPYC.NETWORK) {
     return fail(
       400,
+      "invalid_chain_id",
       `Unsupported paymentPayload.network: ${paymentPayload.network} (expected ${JPYC.NETWORK})`,
     );
   }
   if (paymentRequirements.network !== JPYC.NETWORK) {
     return fail(
       400,
+      "invalid_chain_id",
       `Unsupported paymentRequirements.network: ${paymentRequirements.network} (expected ${JPYC.NETWORK})`,
     );
   }
@@ -140,12 +224,14 @@ export async function validatePayment(
     if (extra.name !== undefined && extra.name !== JPYC.EIP712_NAME) {
       return fail(
         400,
+        "invalid_extra",
         `paymentRequirements.extra.name mismatch: "${extra.name}" (expected "${JPYC.EIP712_NAME}")`,
       );
     }
     if (extra.version !== undefined && extra.version !== JPYC.EIP712_VERSION) {
       return fail(
         400,
+        "invalid_extra",
         `paymentRequirements.extra.version mismatch: "${extra.version}" (expected "${JPYC.EIP712_VERSION}")`,
       );
     }
@@ -157,7 +243,16 @@ export async function validatePayment(
   if (!auth.from || !auth.to || !auth.value || !auth.nonce || !signature) {
     return fail(
       400,
+      "invalid_request",
       "Missing fields: from, to, value, nonce, and payload.signature are required",
+    );
+  }
+
+  if (!isValidNonceFormat(auth.nonce)) {
+    return fail(
+      400,
+      "invalid_nonce_format",
+      "Authorization nonce must be 0x-prefixed bytes32 (32 bytes / 64 hex chars)",
     );
   }
 
@@ -167,63 +262,75 @@ export async function validatePayment(
     fromAddr = getAddress(auth.from);
     toAddr = getAddress(auth.to);
   } catch {
-    return fail(400, "Invalid from or to address");
+    return fail(400, "invalid_address", "Invalid from or to address");
   }
 
   if (!paymentRequirements.asset) {
-    return fail(400, "Missing paymentRequirements.asset");
+    return fail(400, "invalid_asset", "Missing paymentRequirements.asset");
   }
   try {
     if (getAddress(paymentRequirements.asset) !== getAddress(JPYC.ADDRESS)) {
-      return fail(400, `Unsupported asset: expected JPYC (${JPYC.ADDRESS})`);
+      return fail(
+        400,
+        "invalid_asset",
+        `Unsupported asset: expected JPYC (${JPYC.ADDRESS})`,
+      );
     }
   } catch {
-    return fail(400, "Invalid asset address");
+    return fail(400, "invalid_asset", "Invalid asset address");
   }
 
   if (!paymentRequirements.payTo) {
-    return fail(400, "Missing paymentRequirements.payTo");
+    return fail(400, "invalid_pay_to", "Missing paymentRequirements.payTo");
   }
   let declaredPayTo: Address;
   try {
     declaredPayTo = getAddress(paymentRequirements.payTo);
   } catch {
-    return fail(400, "Invalid paymentRequirements.payTo address");
+    return fail(
+      400,
+      "invalid_pay_to",
+      "Invalid paymentRequirements.payTo address",
+    );
   }
   if (declaredPayTo !== recipientAddress) {
     return fail(
       400,
+      "invalid_pay_to",
       "paymentRequirements.payTo does not match registered payTo address",
     );
   }
   if (toAddr !== recipientAddress) {
     return fail(
       400,
+      "invalid_pay_to",
       "Authorization 'to' does not match registered payTo address",
     );
   }
 
   let value: bigint;
   try {
+    if (typeof auth.value !== "string") throw new Error("non-string value");
     value = BigInt(auth.value);
     if (value <= 0n) throw new Error();
   } catch {
-    return fail(400, "Invalid authorization value");
+    return fail(400, "invalid_amount", "Invalid authorization value");
   }
 
   if (!paymentRequirements.amount) {
-    return fail(400, "Missing paymentRequirements.amount");
+    return fail(400, "invalid_amount", "Missing paymentRequirements.amount");
   }
   let requiredAmount: bigint;
   try {
     requiredAmount = BigInt(paymentRequirements.amount);
     if (requiredAmount <= 0n) throw new Error();
   } catch {
-    return fail(400, "Invalid paymentRequirements.amount");
+    return fail(400, "invalid_amount", "Invalid paymentRequirements.amount");
   }
   if (value < requiredAmount) {
     return fail(
       400,
+      "invalid_amount",
       `Authorization value ${value} is less than required ${requiredAmount}`,
     );
   }
@@ -233,11 +340,19 @@ export async function validatePayment(
   const validBefore = BigInt(auth.validBefore ?? "0");
 
   const nowSec = BigInt(Math.floor(Date.now() / 1000));
-  if (validBefore !== 0n && validBefore < nowSec) {
-    return fail(400, "Authorization has expired (validBefore)");
+  if (validBefore !== 0n && validBefore <= nowSec) {
+    return fail(
+      400,
+      "authorization_expired",
+      "Authorization has expired (validBefore)",
+    );
   }
   if (validAfter > nowSec) {
-    return fail(400, "Authorization is not yet valid (validAfter)");
+    return fail(
+      400,
+      "authorization_not_yet_valid",
+      "Authorization is not yet valid (validAfter)",
+    );
   }
 
   let sigValid: boolean;
@@ -259,10 +374,14 @@ export async function validatePayment(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return fail(400, `Invalid signature: ${message}`);
+    return fail(400, "invalid_signature", `Invalid signature: ${message}`);
   }
   if (!sigValid) {
-    return fail(400, "Signature does not match 'from' address");
+    return fail(
+      400,
+      "invalid_signature",
+      "Signature does not match 'from' address",
+    );
   }
 
   try {
@@ -273,12 +392,23 @@ export async function validatePayment(
       args: [fromAddr, nonce],
     });
     if (used) {
-      return fail(400, "Authorization nonce already used (replay)");
+      return fail(
+        400,
+        "nonce_already_used",
+        "Authorization nonce already used (replay)",
+      );
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[payment-validation] authorizationState check failed:", message);
-    return fail(500, "Failed to check authorization state");
+    console.error(
+      "[payment-validation] authorizationState check failed:",
+      message,
+    );
+    return fail(
+      503,
+      "rpc_unavailable",
+      "Failed to check authorization state",
+    );
   }
 
   return {
@@ -293,4 +423,172 @@ export async function validatePayment(
       signature: signature as Hex,
     },
   };
+}
+
+class SimulationTimeoutError extends Error {
+  constructor() {
+    super("simulation_timeout");
+    this.name = "SimulationTimeoutError";
+  }
+}
+
+const DEFAULT_SIMULATION_TIMEOUT_MS = 3000;
+
+/**
+ * Pre-flight on-chain validation for transferWithAuthorization.
+ *
+ * Catches reverts that signature/nonce/expiry checks cannot detect:
+ * insufficient JPYC balance, frozen accounts, or facilitator gas
+ * exhaustion. Required because verify=200 followed by settle=revert
+ * is a worse failure mode than verify=400 up front.
+ *
+ * RPC timeouts return 503 (retriable) rather than 400 — a flaky
+ * RPC must not be reported as a malformed authorization.
+ */
+export async function simulateTransferWithAuthorization(
+  payment: ValidatedPayment,
+  publicClient: PublicClient,
+  facilitatorAddress: Address,
+  options?: { timeoutMs?: number },
+): Promise<SimulationResult> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_SIMULATION_TIMEOUT_MS;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(
+      () => reject(new SimulationTimeoutError()),
+      timeoutMs,
+    );
+  });
+
+  try {
+    return await Promise.race([
+      runSimulation(payment, publicClient, facilitatorAddress),
+      timeoutPromise,
+    ]);
+  } catch (err) {
+    if (err instanceof SimulationTimeoutError) {
+      return simFail(
+        503,
+        "simulation_timeout",
+        `Simulation timed out after ${timeoutMs}ms`,
+      );
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return simFail(503, "rpc_unavailable", `RPC unavailable: ${message}`);
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+}
+
+async function runSimulation(
+  payment: ValidatedPayment,
+  publicClient: PublicClient,
+  facilitatorAddress: Address,
+): Promise<SimulationResult> {
+  const { fromAddr, toAddr, value, validAfter, validBefore, nonce, signature } =
+    payment;
+
+  let used: boolean;
+  try {
+    used = (await publicClient.readContract({
+      address: JPYC.ADDRESS,
+      abi: AUTH_STATE_ABI,
+      functionName: "authorizationState",
+      args: [fromAddr, nonce],
+    })) as boolean;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return simFail(
+      503,
+      "rpc_unavailable",
+      `Failed to read authorizationState: ${message}`,
+    );
+  }
+  if (used) {
+    return simFail(
+      400,
+      "nonce_already_used",
+      "Authorization nonce already used (replay)",
+    );
+  }
+
+  let v: number;
+  let r: Hex;
+  let s: Hex;
+  try {
+    ({ v, r, s } = splitEip3009Signature(signature));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return simFail(400, "invalid_signature", `Invalid signature: ${message}`);
+  }
+
+  const args = [
+    fromAddr,
+    toAddr,
+    value,
+    validAfter,
+    validBefore,
+    nonce,
+    v,
+    r,
+    s,
+  ] as const;
+
+  try {
+    await publicClient.simulateContract({
+      address: JPYC.ADDRESS,
+      abi: TRANSFER_WITH_AUTHORIZATION_ABI,
+      functionName: "transferWithAuthorization",
+      args,
+      account: facilitatorAddress,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return simFail(400, "simulation_failed", `Simulation reverted: ${message}`);
+  }
+
+  let gasEstimate: bigint;
+  try {
+    gasEstimate = await publicClient.estimateContractGas({
+      address: JPYC.ADDRESS,
+      abi: TRANSFER_WITH_AUTHORIZATION_ABI,
+      functionName: "transferWithAuthorization",
+      args,
+      account: facilitatorAddress,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return simFail(
+      400,
+      "simulation_failed",
+      `Gas estimation failed: ${message}`,
+    );
+  }
+
+  let balance: bigint;
+  let gasPrice: bigint;
+  try {
+    [balance, gasPrice] = await Promise.all([
+      publicClient.getBalance({ address: facilitatorAddress }),
+      publicClient.getGasPrice(),
+    ]);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return simFail(
+      503,
+      "rpc_unavailable",
+      `Failed to read balance or gasPrice: ${message}`,
+    );
+  }
+
+  const estimatedCost = gasEstimate * gasPrice;
+  if (balance < estimatedCost) {
+    return simFail(
+      503,
+      "facilitator_insufficient_native_balance",
+      `Facilitator native balance ${balance} wei < estimated cost ${estimatedCost} wei (gas=${gasEstimate}, price=${gasPrice})`,
+    );
+  }
+
+  return { ok: true, gasEstimate };
 }

@@ -7,7 +7,6 @@ import {
   createWalletClient,
   getAddress,
   http,
-  parseAbi,
   type Address,
   type Hex,
 } from "viem";
@@ -17,13 +16,11 @@ import { supabase } from "../lib/supabase";
 import { claimNonce } from "../lib/replay.js";
 import {
   JPYC,
+  TRANSFER_WITH_AUTHORIZATION_ABI,
+  splitEip3009Signature,
   validatePayment,
   type PaymentRequestBody,
 } from "../lib/payment-validation.js";
-
-const EIP3009_TRANSFER_ABI = parseAbi([
-  "function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)",
-]);
 
 const _privateKey = process.env.FACILITATOR_PRIVATE_KEY;
 const _rpcUrl = process.env.POLYGON_RPC_URL;
@@ -59,20 +56,6 @@ async function hashApiKey(apiKey: string): Promise<string> {
   return Array.from(new Uint8Array(buf))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-}
-
-function splitSignature(sig: Hex): { v: number; r: Hex; s: Hex } {
-  const raw = sig.startsWith("0x") ? sig.slice(2) : sig;
-  if (raw.length !== 130) {
-    throw new Error(
-      `Invalid signature length: expected 130 hex chars, got ${raw.length}`,
-    );
-  }
-  const r = `0x${raw.slice(0, 64)}` as Hex;
-  const s = `0x${raw.slice(64, 128)}` as Hex;
-  let v = parseInt(raw.slice(128, 130), 16);
-  if (v < 27) v += 27;
-  return { v, r, s };
 }
 
 export default async function handler(req: Request): Promise<Response> {
@@ -112,7 +95,7 @@ export default async function handler(req: Request): Promise<Response> {
 
   const result = await validatePayment(body, recipientAddress, publicClient);
   if (!result.ok) {
-    return json({ error: result.error }, result.status);
+    return json({ error: result.error, code: result.code }, result.status);
   }
 
   const { fromAddr, value, validAfter, validBefore, nonce, signature } =
@@ -126,23 +109,32 @@ export default async function handler(req: Request): Promise<Response> {
     validBefore,
   });
   if (!claimed) {
-    return json({ error: "Authorization nonce already used (replay)" }, 400);
+    return json(
+      {
+        error: "Authorization nonce already used (replay)",
+        code: "nonce_already_used",
+      },
+      400,
+    );
   }
 
   let v: number;
   let r: Hex;
   let s: Hex;
   try {
-    ({ v, r, s } = splitSignature(signature));
+    ({ v, r, s } = splitEip3009Signature(signature));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return json({ error: `Invalid signature: ${message}` }, 400);
+    return json(
+      { error: `Invalid signature: ${message}`, code: "invalid_signature" },
+      400,
+    );
   }
 
   try {
     const txHash = await walletClient.writeContract({
       address: JPYC.ADDRESS,
-      abi: EIP3009_TRANSFER_ABI,
+      abi: TRANSFER_WITH_AUTHORIZATION_ABI,
       functionName: "transferWithAuthorization",
       args: [
         fromAddr,

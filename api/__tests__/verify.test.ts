@@ -29,12 +29,24 @@ vi.mock("viem", async () => {
   };
 });
 
+vi.mock("viem/accounts", () => ({
+  privateKeyToAccount: vi.fn(() => ({
+    address: "0xFacilitator0000000000000000000000000000",
+    signTransaction: vi.fn(),
+  })),
+}));
+
 const mockPublicClient = {
   readContract: vi.fn(),
+  simulateContract: vi.fn(),
+  estimateContractGas: vi.fn(),
+  getBalance: vi.fn(),
+  getGasPrice: vi.fn(),
 };
 
 // Stub env before importing handler
 vi.stubEnv("POLYGON_RPC_URL", "https://fake-rpc.test");
+vi.stubEnv("FACILITATOR_PRIVATE_KEY", "0x" + "ab".repeat(32));
 vi.stubEnv("API_KEY", "test-secret");
 
 let handler: typeof import("../verify.js").default;
@@ -111,6 +123,10 @@ describe("POST /api/verify (EIP-3009)", () => {
       error: null,
     });
     mockVerifyTypedData.mockResolvedValue(true);
+    mockPublicClient.simulateContract.mockResolvedValue({ result: undefined });
+    mockPublicClient.estimateContractGas.mockResolvedValue(80_000n);
+    mockPublicClient.getBalance.mockResolvedValue(10n ** 18n);
+    mockPublicClient.getGasPrice.mockResolvedValue(50n * 10n ** 9n);
   });
 
   it("returns 405 for non-POST methods", async () => {
@@ -207,15 +223,44 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(data.txHash).toBeUndefined();
   });
 
-  it("returns 500 when authorizationState RPC call fails", async () => {
+  it("returns 503 when authorizationState RPC call fails", async () => {
     mockPublicClient.readContract.mockRejectedValue(new Error("RPC error"));
 
     const res = await handler(
       makeRequest({ apiKey: "test-secret", body: validBody }),
     );
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(503);
     const data: any = await res.json();
     expect(data.error).toContain("authorization state");
+    expect(data.code).toBe("rpc_unavailable");
+  });
+
+  it("returns 503 when facilitator native balance is insufficient", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockPublicClient.estimateContractGas.mockResolvedValue(100_000n);
+    mockPublicClient.getGasPrice.mockResolvedValue(100n * 10n ** 9n);
+    mockPublicClient.getBalance.mockResolvedValue(1n); // ~zero
+
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: validBody }),
+    );
+    expect(res.status).toBe(503);
+    const data: any = await res.json();
+    expect(data.code).toBe("facilitator_insufficient_native_balance");
+  });
+
+  it("returns 400 with simulation_failed code when simulate reverts", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockPublicClient.simulateContract.mockRejectedValue(
+      new Error("execution reverted: ECRecover failed"),
+    );
+
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: validBody }),
+    );
+    expect(res.status).toBe(400);
+    const data: any = await res.json();
+    expect(data.code).toBe("simulation_failed");
   });
 
   it("returns 400 when signature does not match from", async () => {

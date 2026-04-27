@@ -155,6 +155,8 @@ Both the short form and `/api/*` form resolve to the same handler (Vercel rewrit
 
 ## Validation Rules
 
+Static checks (`validatePayment`):
+
 - `paymentPayload.x402Version` ∈ {1, 2}
 - `paymentPayload.scheme` = `"exact"` and `paymentRequirements.scheme` = `"exact"`
 - `paymentPayload.network` = `paymentRequirements.network` = `"eip155:137"`
@@ -163,10 +165,20 @@ Both the short form and `/api/*` form resolve to the same handler (Vercel rewrit
 - `paymentRequirements.asset` checksummed = JPYC contract
 - `paymentRequirements.payTo` checksummed = recipient bound to the API key
 - `authorization.to` checksummed = recipient bound to the API key
+- `authorization.nonce` matches `^0x[0-9a-fA-F]{64}$`
 - `authorization.value` ≥ `paymentRequirements.amount`, both > 0
-- `validAfter` ≤ now ≤ `validBefore` (when non-zero)
+- `validAfter` ≤ now < `validBefore` (when non-zero)
 - EIP-712 signature recovers to `authorization.from`
 - `authorizationState(from, nonce)` on-chain returns `false`
+
+On-chain pre-flight (`simulateTransferWithAuthorization`, run by `/verify`):
+
+- `authorizationState(from, nonce)` re-checked (concurrency safety)
+- `simulateContract(transferWithAuthorization, …)` does not revert
+- `estimateContractGas` succeeds
+- Facilitator native (MATIC) balance ≥ `gasEstimate * gasPrice`
+
+The simulation has a hard 3-second timeout. On timeout the response is `503 simulation_timeout`, not a 4xx — a flaky RPC must not be reported as a malformed authorization.
 
 ## Authentication
 
@@ -187,17 +199,40 @@ Both the short form and `/api/*` form resolve to the same handler (Vercel rewrit
 
 | Status | Cause |
 |---|---|
-| 400 | Validation failure (schema, signature, addresses, amount, expiry, replay) |
+| 400 | Validation failure (schema, signature, addresses, amount, expiry, replay, simulation revert) |
 | 401 | Missing or unrecognized `x-api-key` |
 | 405 | Wrong HTTP method |
-| 500 | Internal failure (RPC unavailable, contract revert during settle) |
-| 503 | Service not configured (missing `POLYGON_RPC_URL` or `FACILITATOR_PRIVATE_KEY`) |
+| 500 | Internal failure (contract revert during settle broadcast) |
+| 503 | Service not configured, RPC unavailable, simulation timeout, or facilitator out of native balance |
 
 Error body:
 
 ```json
-{ "error": "<message>" }
+{ "error": "<human readable>", "code": "<error_code>" }
 ```
+
+### Error code catalog
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `invalid_request` | 400 | Malformed JSON or missing required fields |
+| `invalid_x402_version` | 400 | `x402Version` not in {1, 2} |
+| `invalid_scheme` | 400 | `scheme` is not `"exact"` |
+| `invalid_chain_id` | 400 | `network` is not `"eip155:137"` |
+| `invalid_extra` | 400 | `extra.name` or `extra.version` mismatch |
+| `invalid_asset` | 400 | `asset` is not the JPYC contract |
+| `invalid_address` | 400 | `from` or `to` is not a valid address |
+| `invalid_pay_to` | 400 | `payTo` or `authorization.to` does not match the API key's bound recipient |
+| `invalid_amount` | 400 | `value` < `amount`, or either is zero/non-positive |
+| `invalid_nonce_format` | 400 | `nonce` is not a 32-byte hex string |
+| `authorization_expired` | 400 | `validBefore` ≤ now |
+| `authorization_not_yet_valid` | 400 | `validAfter` > now |
+| `invalid_signature` | 400 | EIP-712 signature does not recover to `from`, or signature length is wrong |
+| `nonce_already_used` | 400 | `authorizationState(from, nonce)` returned true on-chain |
+| `simulation_failed` | 400 | `simulateContract` or `estimateContractGas` reverted |
+| `simulation_timeout` | 503 | On-chain simulation exceeded 3 seconds |
+| `facilitator_insufficient_native_balance` | 503 | Facilitator MATIC balance below estimated gas cost |
+| `rpc_unavailable` | 503 | RPC error reading authorizationState, balance, or gas price |
 
 ## References
 

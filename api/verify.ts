@@ -2,15 +2,30 @@ export const config = {
   runtime: "edge",
 };
 
-import { createPublicClient, getAddress, http, type Address } from "viem";
+import {
+  createPublicClient,
+  getAddress,
+  http,
+  type Address,
+  type Hex,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { supabase } from "../lib/supabase";
 import {
+  simulateTransferWithAuthorization,
   validatePayment,
   type PaymentRequestBody,
 } from "../lib/payment-validation.js";
 
 const _rpcUrl = process.env.POLYGON_RPC_URL;
+const _privateKey = process.env.FACILITATOR_PRIVATE_KEY;
+
+const _key = _privateKey
+  ? ((_privateKey.startsWith("0x") ? _privateKey : `0x${_privateKey}`) as Hex)
+  : null;
+
+const _facilitatorAccount = _key ? privateKeyToAccount(_key) : null;
 
 const publicClient = _rpcUrl
   ? createPublicClient({ chain: polygon, transport: http(_rpcUrl) })
@@ -57,17 +72,32 @@ export default async function handler(req: Request): Promise<Response> {
   if (!publicClient) {
     return json({ error: "Service not configured (RPC)" }, 503);
   }
+  if (!_facilitatorAccount) {
+    return json(
+      { error: "Service not configured (facilitator key)" },
+      503,
+    );
+  }
 
   let body: PaymentRequestBody;
   try {
     body = (await req.json()) as PaymentRequestBody;
   } catch {
-    return json({ error: "Invalid JSON body" }, 400);
+    return json({ error: "Invalid JSON body", code: "invalid_request" }, 400);
   }
 
   const result = await validatePayment(body, recipientAddress, publicClient);
   if (!result.ok) {
-    return json({ error: result.error }, result.status);
+    return json({ error: result.error, code: result.code }, result.status);
+  }
+
+  const sim = await simulateTransferWithAuthorization(
+    result.payment,
+    publicClient,
+    _facilitatorAccount.address,
+  );
+  if (!sim.ok) {
+    return json({ error: sim.error, code: sim.code }, sim.status);
   }
 
   const now = new Date().toISOString();
