@@ -187,6 +187,14 @@ The simulation has a hard 3-second timeout. On timeout the response is `503 simu
 - Match against `api_keys.api_key_hash` where `is_active = true`
 - The destination of every transfer is `api_keys.recipient_address` for the matched row. The caller cannot override it.
 
+## Usage logging
+
+Successful `/verify` and `/settle` calls record a row in `api_key_usage` and bump `api_keys.last_used_at`. Both writes are **best-effort** and run via `waitUntil` on Vercel Edge — they are not awaited before the response is returned.
+
+- Failures are logged to stderr as JSON with `event: "usage_log_failed"`; the response itself is unaffected.
+- The on-chain transaction is the source of truth for billing. The usage table is only used for dashboards and rate-limit signals; **do not rely on it for accounting**.
+- Outside the Vercel runtime (`vercel dev`, vitest, raw Node) `waitUntil` is a no-op; the write still runs but the host may not extend the request lifetime to wait for it.
+
 ## Replay Protection
 
 - Backend: Upstash Redis

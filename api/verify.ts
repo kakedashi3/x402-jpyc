@@ -17,6 +17,7 @@ import {
   validatePayment,
   type PaymentRequestBody,
 } from "../lib/payment-validation.js";
+import { logUsage } from "../lib/usage-log.js";
 
 const _rpcUrl = process.env.POLYGON_RPC_URL;
 const _privateKey = process.env.FACILITATOR_PRIVATE_KEY;
@@ -100,18 +101,7 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: sim.error, code: sim.code }, sim.status);
   }
 
-  const now = new Date().toISOString();
-  await Promise.all([
-    supabase.from("api_key_usage").insert({
-      api_key_id: keyRow.id,
-      event: "verify_success",
-      created_at: now,
-    }),
-    supabase
-      .from("api_keys")
-      .update({ last_used_at: now })
-      .eq("id", keyRow.id),
-  ]);
+  logUsage({ apiKeyId: keyRow.id, event: "verify_success" });
 
   return json({ isValid: true, payer: result.payment.fromAddr });
 }

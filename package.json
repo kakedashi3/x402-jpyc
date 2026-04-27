@@ -15,6 +15,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.103.3",
     "@upstash/redis": "^1.37.0",
+    "@vercel/functions": "^3.4.4",
     "bs58": "^6.0.0",
     "viem": "^2.48.1"
   },

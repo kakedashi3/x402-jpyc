@@ -14,6 +14,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { supabase } from "../lib/supabase";
 import { claimNonce } from "../lib/replay.js";
+import { logUsage } from "../lib/usage-log.js";
 import {
   JPYC,
   TRANSFER_WITH_AUTHORIZATION_ABI,
@@ -181,17 +182,7 @@ export default async function handler(req: Request): Promise<Response> {
       }),
     );
 
-    await Promise.all([
-      supabase.from("api_key_usage").insert({
-        api_key_id: keyRow.id,
-        event: "settle_success",
-        created_at: now,
-      }),
-      supabase
-        .from("api_keys")
-        .update({ last_used_at: now })
-        .eq("id", keyRow.id),
-    ]);
+    logUsage({ apiKeyId: keyRow.id, event: "settle_success", createdAt: now });
 
     return json(
       { success: true, txHash, network: JPYC.NETWORK },
