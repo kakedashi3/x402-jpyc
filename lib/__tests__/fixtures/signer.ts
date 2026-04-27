@@ -1,6 +1,6 @@
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
-import { JPYC } from "../../payment-validation.js";
+import { POLYGON, type ChainConfig } from "../../chain-config.js";
 
 // Test-only private keys. NEVER use these on mainnet.
 // Generated from arbitrary 32-byte patterns; published in this repo on purpose.
@@ -39,13 +39,14 @@ const EIP712_TYPES = {
 export async function signAuthorization(
   signer: PrivateKeyAccount,
   auth: AuthInput,
+  chain: ChainConfig = POLYGON,
 ): Promise<Hex> {
   return signer.signTypedData({
     domain: {
-      name: JPYC.EIP712_NAME,
-      version: JPYC.EIP712_VERSION,
-      chainId: JPYC.CHAIN_ID,
-      verifyingContract: JPYC.ADDRESS,
+      name: chain.eip712Name,
+      version: chain.eip712Version,
+      chainId: chain.chainId,
+      verifyingContract: chain.jpycAddress,
     },
     types: EIP712_TYPES,
     primaryType: "TransferWithAuthorization",

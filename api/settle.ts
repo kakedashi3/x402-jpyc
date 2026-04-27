@@ -2,48 +2,26 @@ export const config = {
   runtime: "edge",
 };
 
-import {
-  createPublicClient,
-  createWalletClient,
-  getAddress,
-  http,
-  type Address,
-  type Hex,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { polygon } from "viem/chains";
+import { getAddress, type Address, type Hex } from "viem";
 import { supabase } from "../lib/supabase";
 import { claimNonce } from "../lib/replay.js";
 import { logUsage } from "../lib/usage-log.js";
 import {
-  JPYC,
+  ChainNotSupportedError,
+  getFacilitatorAccount,
+  getPublicClient,
+  getWalletClient,
+  resolveChain,
+  type ChainConfig,
+} from "../lib/chain-config.js";
+import {
   TRANSFER_WITH_AUTHORIZATION_ABI,
   splitEip3009Signature,
   validatePayment,
   type PaymentRequestBody,
 } from "../lib/payment-validation.js";
 
-const _privateKey = process.env.FACILITATOR_PRIVATE_KEY;
-const _rpcUrl = process.env.POLYGON_RPC_URL;
-
-const _key = _privateKey
-  ? ((_privateKey.startsWith("0x") ? _privateKey : `0x${_privateKey}`) as Hex)
-  : null;
-
-const _account = _key ? privateKeyToAccount(_key) : null;
-
-const walletClient =
-  _account && _rpcUrl
-    ? createWalletClient({
-        account: _account,
-        chain: polygon,
-        transport: http(_rpcUrl),
-      })
-    : null;
-
-const publicClient = _rpcUrl
-  ? createPublicClient({ chain: polygon, transport: http(_rpcUrl) })
-  : null;
+const _facilitatorAccount = getFacilitatorAccount();
 
 function json(
   data: unknown,
@@ -76,7 +54,7 @@ export default async function handler(req: Request): Promise<Response> {
   const keyHash = await hashApiKey(providedKey);
   const { data: keyRow, error: keyError } = await supabase
     .from("api_keys")
-    .select("id, user_id, recipient_address")
+    .select("id, user_id, recipient_address, chain_id")
     .eq("api_key_hash", keyHash)
     .eq("is_active", true)
     .single();
@@ -86,9 +64,30 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const recipientAddress: Address = getAddress(keyRow.recipient_address);
+  const requestedChainId = (keyRow.chain_id as number | null) ?? 137;
 
-  if (!walletClient || !publicClient) {
-    return json({ error: "Service not configured (wallet/RPC)" }, 503);
+  let chain: ChainConfig;
+  try {
+    chain = resolveChain(requestedChainId);
+  } catch (err) {
+    if (err instanceof ChainNotSupportedError) {
+      return json({ error: err.message, code: "invalid_chain_id" }, 400);
+    }
+    throw err;
+  }
+
+  if (!_facilitatorAccount) {
+    return json({ error: "Service not configured (facilitator key)" }, 503);
+  }
+
+  let publicClient;
+  let walletClient;
+  try {
+    publicClient = getPublicClient(chain);
+    walletClient = getWalletClient(chain, _facilitatorAccount);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return json({ error: `Service not configured: ${message}` }, 503);
   }
 
   let body: PaymentRequestBody;
@@ -98,7 +97,12 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  const result = await validatePayment(body, recipientAddress, publicClient);
+  const result = await validatePayment(
+    body,
+    recipientAddress,
+    publicClient,
+    chain,
+  );
   if (!result.ok) {
     return json({ error: result.error, code: result.code }, result.status);
   }
@@ -111,7 +115,8 @@ export default async function handler(req: Request): Promise<Response> {
   // can retry rather than risk a double broadcast. Operators can opt into
   // legacy fail-open via REPLAY_FAIL_OPEN=true.
   const claim = await claimNonce({
-    contractAddress: JPYC.ADDRESS,
+    chainId: chain.chainId,
+    contractAddress: chain.jpycAddress,
     from: fromAddr,
     nonce,
     validBefore,
@@ -151,7 +156,7 @@ export default async function handler(req: Request): Promise<Response> {
 
   try {
     const txHash = await walletClient.writeContract({
-      address: JPYC.ADDRESS,
+      address: chain.jpycAddress,
       abi: TRANSFER_WITH_AUTHORIZATION_ABI,
       functionName: "transferWithAuthorization",
       args: [
@@ -165,6 +170,8 @@ export default async function handler(req: Request): Promise<Response> {
         r,
         s,
       ],
+      account: _facilitatorAccount,
+      chain: chain.viemChain,
     });
 
     const now = new Date().toISOString();
@@ -174,10 +181,10 @@ export default async function handler(req: Request): Promise<Response> {
         event: "settle_success",
         txHash,
         amount: value.toString(),
-        asset: JPYC.ADDRESS,
+        asset: chain.jpycAddress,
         payTo: recipientAddress,
         from: fromAddr,
-        network: JPYC.NETWORK,
+        network: chain.networkId,
         timestamp: now,
       }),
     );
@@ -185,7 +192,7 @@ export default async function handler(req: Request): Promise<Response> {
     logUsage({ apiKeyId: keyRow.id, event: "settle_success", createdAt: now });
 
     return json(
-      { success: true, txHash, network: JPYC.NETWORK },
+      { success: true, txHash, network: chain.networkId },
       200,
       { "X-Replay-Protection": replayHeader },
     );

@@ -20,6 +20,7 @@ import {
   asPublicClient,
   createMockPublicClient,
 } from "./fixtures/mock-client.js";
+import { AMOY, POLYGON } from "../chain-config.js";
 
 const NONCE_A = ("0x" + "aa".repeat(32)) as Hex;
 const ASSET = JPYC.ADDRESS;
@@ -207,6 +208,118 @@ describe("validatePayment — success cases", () => {
       asPublicClient(client),
     );
     expect(result.ok).toBe(true);
+  });
+
+  it("ok: Amoy chain (80002) when chain config matches", async () => {
+    const validBefore = String(Number(nowSec()) + 3600);
+    const value = "1000000000000000000";
+    const nonce = NONCE_A;
+    const signature = await signAuthorization(
+      testSigner,
+      {
+        from: testSigner.address,
+        to: RECIPIENT_ADDRESS,
+        value: BigInt(value),
+        validAfter: 0n,
+        validBefore: BigInt(validBefore),
+        nonce,
+      },
+      AMOY,
+    );
+    const body = {
+      paymentPayload: {
+        x402Version: 2,
+        scheme: "exact",
+        network: "eip155:80002",
+        payload: {
+          signature,
+          authorization: {
+            from: testSigner.address,
+            to: RECIPIENT_ADDRESS,
+            value,
+            validAfter: "0",
+            validBefore,
+            nonce,
+          },
+        },
+      },
+      paymentRequirements: {
+        scheme: "exact",
+        network: "eip155:80002",
+        asset: AMOY.jpycAddress,
+        amount: value,
+        payTo: RECIPIENT_ADDRESS,
+        extra: { name: "JPY Coin", version: "1" },
+      },
+    };
+    const result = await validatePayment(
+      body,
+      RECIPIENT_ADDRESS,
+      asPublicClient(client),
+      AMOY,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("invalid_chain_id: Polygon body rejected when chain=AMOY", async () => {
+    const body = await buildValidBody(); // signed for Polygon (137)
+    const result = await validatePayment(
+      body,
+      RECIPIENT_ADDRESS,
+      asPublicClient(client),
+      AMOY,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("invalid_chain_id");
+  });
+
+  it("invalid_signature: Amoy network header but signed for Polygon", async () => {
+    // Sign with Polygon domain but submit as Amoy.
+    const validBefore = String(Number(nowSec()) + 3600);
+    const value = "1000000000000000000";
+    const nonce = NONCE_A;
+    const signature = await signAuthorization(testSigner, {
+      from: testSigner.address,
+      to: RECIPIENT_ADDRESS,
+      value: BigInt(value),
+      validAfter: 0n,
+      validBefore: BigInt(validBefore),
+      nonce,
+    }); // defaults to POLYGON domain
+    const body = {
+      paymentPayload: {
+        x402Version: 2,
+        scheme: "exact",
+        network: "eip155:80002",
+        payload: {
+          signature,
+          authorization: {
+            from: testSigner.address,
+            to: RECIPIENT_ADDRESS,
+            value,
+            validAfter: "0",
+            validBefore,
+            nonce,
+          },
+        },
+      },
+      paymentRequirements: {
+        scheme: "exact",
+        network: "eip155:80002",
+        asset: AMOY.jpycAddress,
+        amount: value,
+        payTo: RECIPIENT_ADDRESS,
+        extra: { name: "JPY Coin", version: "1" },
+      },
+    };
+    const result = await validatePayment(
+      body,
+      RECIPIENT_ADDRESS,
+      asPublicClient(client),
+      AMOY,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("invalid_signature");
   });
 });
 

@@ -7,14 +7,20 @@ import {
   type Hex,
   type PublicClient,
 } from "viem";
+import { POLYGON, type ChainConfig } from "./chain-config.js";
 
+/**
+ * @deprecated Prefer importing chain configs from `./chain-config`.
+ *   `JPYC` is kept as a Polygon-mainnet alias so older callers and
+ *   tests continue to compile.
+ */
 export const JPYC = {
-  ADDRESS: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29" as Address,
-  CHAIN_ID: 137,
-  NETWORK: "eip155:137",
-  SCHEME: "exact",
-  EIP712_NAME: "JPY Coin",
-  EIP712_VERSION: "1",
+  ADDRESS: POLYGON.jpycAddress,
+  CHAIN_ID: POLYGON.chainId,
+  NETWORK: POLYGON.networkId,
+  SCHEME: POLYGON.scheme,
+  EIP712_NAME: POLYGON.eip712Name,
+  EIP712_VERSION: POLYGON.eip712Version,
 } as const;
 
 const SUPPORTED_X402_VERSIONS = new Set([1, 2]);
@@ -27,12 +33,14 @@ export const TRANSFER_WITH_AUTHORIZATION_ABI = parseAbi([
   "function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)",
 ]);
 
-const EIP712_DOMAIN = {
-  name: JPYC.EIP712_NAME,
-  version: JPYC.EIP712_VERSION,
-  chainId: JPYC.CHAIN_ID,
-  verifyingContract: JPYC.ADDRESS,
-} as const;
+function buildEip712Domain(chain: ChainConfig) {
+  return {
+    name: chain.eip712Name,
+    version: chain.eip712Version,
+    chainId: chain.chainId,
+    verifyingContract: chain.jpycAddress,
+  } as const;
+}
 
 const EIP712_TYPES = {
   TransferWithAuthorization: [
@@ -177,6 +185,7 @@ export async function validatePayment(
   body: PaymentRequestBody,
   recipientAddress: Address,
   publicClient: PublicClient,
+  chain: ChainConfig = POLYGON,
 ): Promise<ValidationResult> {
   const { paymentPayload, paymentRequirements } = body;
 
@@ -197,50 +206,50 @@ export async function validatePayment(
     );
   }
 
-  if (paymentPayload.scheme !== JPYC.SCHEME) {
+  if (paymentPayload.scheme !== chain.scheme) {
     return fail(
       400,
       "invalid_scheme",
-      `Unsupported paymentPayload.scheme: ${paymentPayload.scheme} (expected ${JPYC.SCHEME})`,
+      `Unsupported paymentPayload.scheme: ${paymentPayload.scheme} (expected ${chain.scheme})`,
     );
   }
-  if (paymentRequirements.scheme !== JPYC.SCHEME) {
+  if (paymentRequirements.scheme !== chain.scheme) {
     return fail(
       400,
       "invalid_scheme",
-      `Unsupported paymentRequirements.scheme: ${paymentRequirements.scheme} (expected ${JPYC.SCHEME})`,
+      `Unsupported paymentRequirements.scheme: ${paymentRequirements.scheme} (expected ${chain.scheme})`,
     );
   }
 
-  if (paymentPayload.network !== JPYC.NETWORK) {
+  if (paymentPayload.network !== chain.networkId) {
     return fail(
       400,
       "invalid_chain_id",
-      `Unsupported paymentPayload.network: ${paymentPayload.network} (expected ${JPYC.NETWORK})`,
+      `Unsupported paymentPayload.network: ${paymentPayload.network} (expected ${chain.networkId})`,
     );
   }
-  if (paymentRequirements.network !== JPYC.NETWORK) {
+  if (paymentRequirements.network !== chain.networkId) {
     return fail(
       400,
       "invalid_chain_id",
-      `Unsupported paymentRequirements.network: ${paymentRequirements.network} (expected ${JPYC.NETWORK})`,
+      `Unsupported paymentRequirements.network: ${paymentRequirements.network} (expected ${chain.networkId})`,
     );
   }
 
   const extra = paymentRequirements.extra;
   if (extra) {
-    if (extra.name !== undefined && extra.name !== JPYC.EIP712_NAME) {
+    if (extra.name !== undefined && extra.name !== chain.eip712Name) {
       return fail(
         400,
         "invalid_extra",
-        `paymentRequirements.extra.name mismatch: "${extra.name}" (expected "${JPYC.EIP712_NAME}")`,
+        `paymentRequirements.extra.name mismatch: "${extra.name}" (expected "${chain.eip712Name}")`,
       );
     }
-    if (extra.version !== undefined && extra.version !== JPYC.EIP712_VERSION) {
+    if (extra.version !== undefined && extra.version !== chain.eip712Version) {
       return fail(
         400,
         "invalid_extra",
-        `paymentRequirements.extra.version mismatch: "${extra.version}" (expected "${JPYC.EIP712_VERSION}")`,
+        `paymentRequirements.extra.version mismatch: "${extra.version}" (expected "${chain.eip712Version}")`,
       );
     }
   }
@@ -277,11 +286,11 @@ export async function validatePayment(
     return fail(400, "invalid_asset", "Missing paymentRequirements.asset");
   }
   try {
-    if (getAddress(paymentRequirements.asset) !== getAddress(JPYC.ADDRESS)) {
+    if (getAddress(paymentRequirements.asset) !== getAddress(chain.jpycAddress)) {
       return fail(
         400,
         "invalid_asset",
-        `Unsupported asset: expected JPYC (${JPYC.ADDRESS})`,
+        `Unsupported asset: expected JPYC (${chain.jpycAddress}) on ${chain.name}`,
       );
     }
   } catch {
@@ -367,7 +376,7 @@ export async function validatePayment(
   try {
     sigValid = await verifyTypedData({
       address: fromAddr,
-      domain: EIP712_DOMAIN,
+      domain: buildEip712Domain(chain),
       types: EIP712_TYPES,
       primaryType: "TransferWithAuthorization",
       message: {
@@ -394,7 +403,7 @@ export async function validatePayment(
 
   try {
     const used = await publicClient.readContract({
-      address: JPYC.ADDRESS,
+      address: chain.jpycAddress,
       abi: AUTH_STATE_ABI,
       functionName: "authorizationState",
       args: [fromAddr, nonce],
@@ -457,9 +466,10 @@ export async function simulateTransferWithAuthorization(
   payment: ValidatedPayment,
   publicClient: PublicClient,
   facilitatorAddress: Address,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number; chain?: ChainConfig },
 ): Promise<SimulationResult> {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_SIMULATION_TIMEOUT_MS;
+  const chain = options?.chain ?? POLYGON;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutHandle = setTimeout(
@@ -470,7 +480,7 @@ export async function simulateTransferWithAuthorization(
 
   try {
     return await Promise.race([
-      runSimulation(payment, publicClient, facilitatorAddress),
+      runSimulation(payment, publicClient, facilitatorAddress, chain),
       timeoutPromise,
     ]);
   } catch (err) {
@@ -492,6 +502,7 @@ async function runSimulation(
   payment: ValidatedPayment,
   publicClient: PublicClient,
   facilitatorAddress: Address,
+  chain: ChainConfig,
 ): Promise<SimulationResult> {
   const { fromAddr, toAddr, value, validAfter, validBefore, nonce, signature } =
     payment;
@@ -499,7 +510,7 @@ async function runSimulation(
   let used: boolean;
   try {
     used = (await publicClient.readContract({
-      address: JPYC.ADDRESS,
+      address: chain.jpycAddress,
       abi: AUTH_STATE_ABI,
       functionName: "authorizationState",
       args: [fromAddr, nonce],
@@ -544,7 +555,7 @@ async function runSimulation(
 
   try {
     await publicClient.simulateContract({
-      address: JPYC.ADDRESS,
+      address: chain.jpycAddress,
       abi: TRANSFER_WITH_AUTHORIZATION_ABI,
       functionName: "transferWithAuthorization",
       args,
@@ -558,7 +569,7 @@ async function runSimulation(
   let gasEstimate: bigint;
   try {
     gasEstimate = await publicClient.estimateContractGas({
-      address: JPYC.ADDRESS,
+      address: chain.jpycAddress,
       abi: TRANSFER_WITH_AUTHORIZATION_ABI,
       functionName: "transferWithAuthorization",
       args,

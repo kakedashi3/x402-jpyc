@@ -11,14 +11,22 @@ Wire-level specification of the x402-jpyc facilitator. Authoritative source for 
 | Runtime | Vercel Edge Functions |
 | Base URL | `https://x402-jpyc.vercel.app` |
 
+## Supported networks
+
+| Chain | `chain_id` | x402 `network` | RPC env var | JPYC contract | Decimals | Use case |
+|---|---|---|---|---|---|---|
+| Polygon | `137` | `eip155:137` | `POLYGON_RPC_URL` | `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` | 18 | Production |
+| Polygon Amoy | `80002` | `eip155:80002` | `AMOY_RPC_URL` | `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` | 18 | Testnet |
+
+JPYC is deployed at the same proxy address on both chains (deterministic deployment); the implementation behind both proxies exposes EIP-3009 `transferWithAuthorization` with the EIP-712 domain `name="JPY Coin", version="1"`.
+
+API keys are bound to a single chain via `api_keys.chain_id`. A key issued for Amoy cannot settle on Polygon and vice versa; the request's `paymentRequirements.network` must match the key's chain or the response is `400 invalid_chain_id`. Migration: `migrations/001_add_chain_id_to_api_keys.sql`.
+
 ## Asset
 
 | Field | Value |
 |---|---|
 | Name | JPYC (JPY Coin) |
-| Network | Polygon |
-| Network ID | `eip155:137` |
-| Contract | `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` |
 | Decimals | 18 |
 
 ## Scheme
@@ -53,10 +61,12 @@ function authorizationState(address authorizer, bytes32 nonce)
 {
   "name": "JPY Coin",
   "version": "1",
-  "chainId": 137,
+  "chainId": <137 or 80002>,
   "verifyingContract": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29"
 }
 ```
+
+`chainId` matches the chain the API key is bound to. `name`, `version`, and `verifyingContract` are identical on Polygon mainnet and Amoy.
 
 ## EIP-712 Type
 
@@ -131,13 +141,18 @@ Both the short form and `/api/*` form resolve to the same handler (Vercel rewrit
 { "success": true, "txHash": "0x<bytes32>", "network": "eip155:137" }
 ```
 
+The `network` field echoes the chain the API key is bound to (`eip155:137` for Polygon, `eip155:80002` for Amoy).
+
 `GET /health` 200:
 
 ```json
 {
   "status": "ok",
   "service": "x402-jpyc-facilitator",
-  "network": "eip155:137",
+  "networks": [
+    { "chainId": 137,   "network": "eip155:137",   "name": "polygon" },
+    { "chainId": 80002, "network": "eip155:80002", "name": "amoy" }
+  ],
   "asset": "JPYC",
   "timestamp": "<ISO8601>"
 }
@@ -149,7 +164,9 @@ Both the short form and `/api/*` form resolve to the same handler (Vercel rewrit
 {
   "recipientAddress": "0x<address>",
   "network": "eip155:137",
-  "token": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29"
+  "chainId": 137,
+  "token": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
+  "decimals": 18
 }
 ```
 
@@ -159,7 +176,7 @@ Static checks (`validatePayment`):
 
 - `paymentPayload.x402Version` ∈ {1, 2}
 - `paymentPayload.scheme` = `"exact"` and `paymentRequirements.scheme` = `"exact"`
-- `paymentPayload.network` = `paymentRequirements.network` = `"eip155:137"`
+- `paymentPayload.network` = `paymentRequirements.network` = the network bound to the API key (`eip155:137` or `eip155:80002`)
 - `paymentRequirements.extra.name` = `"JPY Coin"` if present
 - `paymentRequirements.extra.version` = `"1"` if present
 - `paymentRequirements.asset` checksummed = JPYC contract
@@ -266,7 +283,7 @@ Error body:
 | `invalid_request` | 400 | Malformed JSON or missing required fields |
 | `invalid_x402_version` | 400 | `x402Version` not in {1, 2} |
 | `invalid_scheme` | 400 | `scheme` is not `"exact"` |
-| `invalid_chain_id` | 400 | `network` is not `"eip155:137"` |
+| `invalid_chain_id` | 400 | `network` does not match the API key's bound chain (or is not a supported network) |
 | `invalid_extra` | 400 | `extra.name` or `extra.version` mismatch |
 | `invalid_asset` | 400 | `asset` is not the JPYC contract |
 | `invalid_address` | 400 | `from` or `to` is not a valid address |

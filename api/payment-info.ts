@@ -2,10 +2,12 @@ export const config = {
   runtime: "edge",
 };
 
-import { getAddress, type Address } from "viem";
+import { getAddress } from "viem";
 import { supabase } from "../lib/supabase";
-
-const JPYC_ADDRESS: Address = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
+import {
+  ChainNotSupportedError,
+  resolveChain,
+} from "../lib/chain-config.js";
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
@@ -34,7 +36,7 @@ export default async function handler(req: Request): Promise<Response> {
   const keyHash = await hashApiKey(providedKey);
   const { data: keyRow, error: keyError } = await supabase
     .from("api_keys")
-    .select("recipient_address")
+    .select("recipient_address, chain_id")
     .eq("api_key_hash", keyHash)
     .eq("is_active", true)
     .single();
@@ -43,9 +45,22 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Unauthorized" }, 401);
   }
 
+  const requestedChainId = (keyRow.chain_id as number | null) ?? 137;
+  let chain;
+  try {
+    chain = resolveChain(requestedChainId);
+  } catch (err) {
+    if (err instanceof ChainNotSupportedError) {
+      return json({ error: err.message, code: "invalid_chain_id" }, 400);
+    }
+    throw err;
+  }
+
   return json({
     recipientAddress: getAddress(keyRow.recipient_address),
-    network: "eip155:137",
-    token: JPYC_ADDRESS,
+    network: chain.networkId,
+    chainId: chain.chainId,
+    token: chain.jpycAddress,
+    decimals: chain.jpycDecimals,
   });
 }

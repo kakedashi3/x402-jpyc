@@ -46,6 +46,7 @@ const mockPublicClient = {
 
 // Stub env before importing handler
 vi.stubEnv("POLYGON_RPC_URL", "https://fake-rpc.test");
+vi.stubEnv("AMOY_RPC_URL", "https://fake-amoy-rpc.test");
 vi.stubEnv("FACILITATOR_PRIVATE_KEY", "0x" + "ab".repeat(32));
 vi.stubEnv("API_KEY", "test-secret");
 
@@ -120,6 +121,7 @@ describe("POST /api/verify (EIP-3009)", () => {
         id: "key-id",
         user_id: "user-id",
         recipient_address: "0x2222222222222222222222222222222222222222",
+        chain_id: 137,
       },
       error: null,
     });

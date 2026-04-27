@@ -3,7 +3,7 @@ import { Redis } from "@upstash/redis";
 /**
  * Upstash Redis-based replay protection for EIP-3009 authorizations.
  *
- * Key format: replay:137:{contractAddress}:{from}:{nonce}
+ * Key format: replay:{chainId}:{contractAddress}:{from}:{nonce}
  * TTL: validBefore - now  (or 86400s default when validBefore=0)
  *
  * Atomic claim via SET NX. Default behavior on Redis error is
@@ -13,8 +13,6 @@ import { Redis } from "@upstash/redis";
  *
  * On transaction revert the key is NOT released (fail-safe).
  */
-
-const CHAIN_ID = "137";
 
 let _redis: Redis | null = null;
 
@@ -32,6 +30,7 @@ function failOpenEnabled(): boolean {
 }
 
 export interface ReplayParams {
+  chainId: number;
   contractAddress: string;
   from: string;
   nonce: string;
@@ -47,7 +46,7 @@ export interface ClaimResult {
 }
 
 function makeKey(p: ReplayParams): string {
-  return `replay:${CHAIN_ID}:${p.contractAddress.toLowerCase()}:${p.from.toLowerCase()}:${p.nonce.toLowerCase()}`;
+  return `replay:${p.chainId}:${p.contractAddress.toLowerCase()}:${p.from.toLowerCase()}:${p.nonce.toLowerCase()}`;
 }
 
 /**

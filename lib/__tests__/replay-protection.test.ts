@@ -12,6 +12,7 @@ vi.mock("@upstash/redis", () => ({
 let claimNonce: typeof import("../replay.js").claimNonce;
 
 const params = {
+  chainId: 137,
   contractAddress: "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29",
   from: "0x1111111111111111111111111111111111111111",
   nonce: "0x" + "aa".repeat(32),

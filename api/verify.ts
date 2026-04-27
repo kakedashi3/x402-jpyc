@@ -2,16 +2,15 @@ export const config = {
   runtime: "edge",
 };
 
-import {
-  createPublicClient,
-  getAddress,
-  http,
-  type Address,
-  type Hex,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { polygon } from "viem/chains";
+import { getAddress, type Address } from "viem";
 import { supabase } from "../lib/supabase";
+import {
+  getFacilitatorAccount,
+  getPublicClient,
+  resolveChain,
+  ChainNotSupportedError,
+  type ChainConfig,
+} from "../lib/chain-config.js";
 import {
   simulateTransferWithAuthorization,
   validatePayment,
@@ -19,18 +18,7 @@ import {
 } from "../lib/payment-validation.js";
 import { logUsage } from "../lib/usage-log.js";
 
-const _rpcUrl = process.env.POLYGON_RPC_URL;
-const _privateKey = process.env.FACILITATOR_PRIVATE_KEY;
-
-const _key = _privateKey
-  ? ((_privateKey.startsWith("0x") ? _privateKey : `0x${_privateKey}`) as Hex)
-  : null;
-
-const _facilitatorAccount = _key ? privateKeyToAccount(_key) : null;
-
-const publicClient = _rpcUrl
-  ? createPublicClient({ chain: polygon, transport: http(_rpcUrl) })
-  : null;
+const _facilitatorAccount = getFacilitatorAccount();
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
@@ -59,7 +47,7 @@ export default async function handler(req: Request): Promise<Response> {
   const keyHash = await hashApiKey(providedKey);
   const { data: keyRow, error: keyError } = await supabase
     .from("api_keys")
-    .select("id, user_id, recipient_address")
+    .select("id, user_id, recipient_address, chain_id")
     .eq("api_key_hash", keyHash)
     .eq("is_active", true)
     .single();
@@ -69,15 +57,34 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const recipientAddress: Address = getAddress(keyRow.recipient_address);
+  const requestedChainId = (keyRow.chain_id as number | null) ?? 137;
 
-  if (!publicClient) {
-    return json({ error: "Service not configured (RPC)" }, 503);
+  let chain: ChainConfig;
+  try {
+    chain = resolveChain(requestedChainId);
+  } catch (err) {
+    if (err instanceof ChainNotSupportedError) {
+      return json(
+        { error: err.message, code: "invalid_chain_id" },
+        400,
+      );
+    }
+    throw err;
   }
+
   if (!_facilitatorAccount) {
     return json(
       { error: "Service not configured (facilitator key)" },
       503,
     );
+  }
+
+  let publicClient;
+  try {
+    publicClient = getPublicClient(chain);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return json({ error: `Service not configured: ${message}` }, 503);
   }
 
   let body: PaymentRequestBody;
@@ -87,7 +94,12 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Invalid JSON body", code: "invalid_request" }, 400);
   }
 
-  const result = await validatePayment(body, recipientAddress, publicClient);
+  const result = await validatePayment(
+    body,
+    recipientAddress,
+    publicClient,
+    chain,
+  );
   if (!result.ok) {
     return json({ error: result.error, code: result.code }, result.status);
   }
@@ -96,6 +108,7 @@ export default async function handler(req: Request): Promise<Response> {
     result.payment,
     publicClient,
     _facilitatorAccount.address,
+    { chain },
   );
   if (!sim.ok) {
     return json({ error: sim.error, code: sim.code }, sim.status);
