@@ -71,7 +71,16 @@ export default async function handler(req: Request): Promise<Response> {
     chain = resolveChain(requestedChainId);
   } catch (err) {
     if (err instanceof ChainNotSupportedError) {
-      return json({ error: err.message, code: "invalid_chain_id" }, 400);
+      return json(
+        {
+          success: false,
+          errorReason: "invalid_chain_id",
+          transaction: "",
+          error: err.message,
+          code: "invalid_chain_id",
+        },
+        400,
+      );
     }
     throw err;
   }
@@ -94,7 +103,17 @@ export default async function handler(req: Request): Promise<Response> {
   try {
     body = (await req.json()) as PaymentRequestBody;
   } catch {
-    return json({ error: "Invalid JSON body" }, 400);
+    return json(
+      {
+        success: false,
+        errorReason: "invalid_request",
+        transaction: "",
+        network: chain.networkId,
+        error: "Invalid JSON body",
+        code: "invalid_request",
+      },
+      400,
+    );
   }
 
   const result = await validatePayment(
@@ -104,7 +123,17 @@ export default async function handler(req: Request): Promise<Response> {
     chain,
   );
   if (!result.ok) {
-    return json({ error: result.error, code: result.code }, result.status);
+    return json(
+      {
+        success: false,
+        errorReason: result.code,
+        transaction: "",
+        network: chain.networkId,
+        error: result.error,
+        code: result.code,
+      },
+      result.status,
+    );
   }
 
   const { fromAddr, value, validAfter, validBefore, nonce, signature } =
@@ -125,6 +154,11 @@ export default async function handler(req: Request): Promise<Response> {
     if (claim.mode === "fail_closed") {
       return json(
         {
+          success: false,
+          errorReason: "service_unavailable",
+          payer: fromAddr,
+          transaction: "",
+          network: chain.networkId,
           error: "Replay-protection store unavailable; please retry",
           code: "service_unavailable",
         },
@@ -133,6 +167,11 @@ export default async function handler(req: Request): Promise<Response> {
     }
     return json(
       {
+        success: false,
+        errorReason: "nonce_already_used",
+        payer: fromAddr,
+        transaction: "",
+        network: chain.networkId,
         error: "Authorization nonce already used (replay)",
         code: "nonce_already_used",
       },
@@ -149,7 +188,15 @@ export default async function handler(req: Request): Promise<Response> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return json(
-      { error: `Invalid signature: ${message}`, code: "invalid_signature" },
+      {
+        success: false,
+        errorReason: "invalid_signature",
+        payer: fromAddr,
+        transaction: "",
+        network: chain.networkId,
+        error: `Invalid signature: ${message}`,
+        code: "invalid_signature",
+      },
       400,
     );
   }
@@ -192,7 +239,13 @@ export default async function handler(req: Request): Promise<Response> {
     logUsage({ apiKeyId: keyRow.id, event: "settle_success", createdAt: now });
 
     return json(
-      { success: true, txHash, network: chain.networkId },
+      {
+        success: true,
+        payer: fromAddr,
+        transaction: txHash,
+        txHash,
+        network: chain.networkId,
+      },
       200,
       { "X-Replay-Protection": replayHeader },
     );
@@ -206,6 +259,16 @@ export default async function handler(req: Request): Promise<Response> {
         timestamp: new Date().toISOString(),
       }),
     );
-    return json({ success: false, error: "Transaction execution failed" }, 500);
+    return json(
+      {
+        success: false,
+        errorReason: "transaction_failed",
+        payer: fromAddr,
+        transaction: "",
+        network: chain.networkId,
+        error: "Transaction execution failed",
+      },
+      500,
+    );
   }
 }

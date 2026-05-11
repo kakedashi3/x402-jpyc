@@ -226,6 +226,21 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(data.txHash).toBeUndefined();
   });
 
+  it("includes invalidReason on validation failures (v2 canonical)", async () => {
+    const expiredBody = structuredClone(validBody);
+    expiredBody.paymentPayload.payload.authorization.validBefore = "1000";
+
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: expiredBody }),
+    );
+    expect(res.status).toBe(400);
+    const data: any = await res.json();
+    expect(data.isValid).toBe(false);
+    expect(data.invalidReason).toBe("authorization_expired");
+    // legacy field preserved
+    expect(data.code).toBe("authorization_expired");
+  });
+
   it("returns 503 when authorizationState RPC call fails", async () => {
     mockPublicClient.readContract.mockRejectedValue(new Error("RPC error"));
 
@@ -276,6 +291,8 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(res.status).toBe(400);
     const data: any = await res.json();
     expect(data.error).toContain("Signature");
-    expect(data.isValid).toBeUndefined();
+    // v2 canonical: error responses now include isValid:false
+    expect(data.isValid).toBe(false);
+    expect(data.invalidReason).toBe("invalid_signature");
   });
 });

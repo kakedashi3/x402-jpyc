@@ -216,7 +216,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     expect(data.error).toContain("payTo");
   });
 
-  it("returns 200 with success, txHash and network on success", async () => {
+  it("returns 200 with success, txHash, transaction, payer and network on success", async () => {
     mockPublicClient.readContract.mockResolvedValue(false); // nonce not used
     mockWalletClient.writeContract.mockResolvedValue(
       "0xdeadbeef" as `0x${string}`,
@@ -229,8 +229,38 @@ describe("POST /api/settle (EIP-3009)", () => {
     expect(res.headers.get("X-Replay-Protection")).toBe("normal");
     const data: any = await res.json();
     expect(data.success).toBe(true);
+    // v2 canonical field name
+    expect(data.transaction).toBe("0xdeadbeef");
+    // legacy alias preserved for backward compatibility
     expect(data.txHash).toBe("0xdeadbeef");
+    expect(data.payer).toBe("0x1111111111111111111111111111111111111111");
     expect(data.network).toBe("eip155:137");
+  });
+
+  it("accepts top-level x402Version when consistent with paymentPayload", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockWalletClient.writeContract.mockResolvedValue(
+      "0xdeadbeef" as `0x${string}`,
+    );
+
+    const bodyWithTopVersion = { ...validBody, x402Version: 2 };
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: bodyWithTopVersion }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects mismatched top-level x402Version", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+
+    const bodyWithMismatch = { ...validBody, x402Version: 1 };
+    const res = await handler(
+      makeRequest({ apiKey: "test-secret", body: bodyWithMismatch }),
+    );
+    expect(res.status).toBe(400);
+    const data: any = await res.json();
+    expect(data.code).toBe("invalid_x402_version");
+    expect(data.errorReason).toBe("invalid_x402_version");
   });
 
   it("returns 503 when claimNonce returns fail_closed (Redis outage)", async () => {
@@ -267,7 +297,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     expect(res.headers.get("X-Replay-Protection")).toBe("degraded");
   });
 
-  it("returns 500 when transferWithAuthorization fails", async () => {
+  it("returns 500 with errorReason, payer, transaction, network when transferWithAuthorization fails", async () => {
     mockPublicClient.readContract.mockResolvedValue(false);
     mockWalletClient.writeContract.mockRejectedValue(
       new Error("execution reverted: ECRecover failed"),
@@ -280,5 +310,9 @@ describe("POST /api/settle (EIP-3009)", () => {
     const data: any = await res.json();
     expect(data.success).toBe(false);
     expect(data.error).toBe("Transaction execution failed");
+    expect(data.errorReason).toBe("transaction_failed");
+    expect(data.payer).toBe("0x1111111111111111111111111111111111111111");
+    expect(data.transaction).toBe("");
+    expect(data.network).toBe("eip155:137");
   });
 });

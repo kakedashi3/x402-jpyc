@@ -65,7 +65,12 @@ export default async function handler(req: Request): Promise<Response> {
   } catch (err) {
     if (err instanceof ChainNotSupportedError) {
       return json(
-        { error: err.message, code: "invalid_chain_id" },
+        {
+          isValid: false,
+          invalidReason: "invalid_chain_id",
+          error: err.message,
+          code: "invalid_chain_id",
+        },
         400,
       );
     }
@@ -91,7 +96,15 @@ export default async function handler(req: Request): Promise<Response> {
   try {
     body = (await req.json()) as PaymentRequestBody;
   } catch {
-    return json({ error: "Invalid JSON body", code: "invalid_request" }, 400);
+    return json(
+      {
+        isValid: false,
+        invalidReason: "invalid_request",
+        error: "Invalid JSON body",
+        code: "invalid_request",
+      },
+      400,
+    );
   }
 
   const result = await validatePayment(
@@ -101,7 +114,15 @@ export default async function handler(req: Request): Promise<Response> {
     chain,
   );
   if (!result.ok) {
-    return json({ error: result.error, code: result.code }, result.status);
+    return json(
+      {
+        isValid: false,
+        invalidReason: result.code,
+        error: result.error,
+        code: result.code,
+      },
+      result.status,
+    );
   }
 
   const sim = await simulateTransferWithAuthorization(
@@ -111,7 +132,16 @@ export default async function handler(req: Request): Promise<Response> {
     { chain },
   );
   if (!sim.ok) {
-    return json({ error: sim.error, code: sim.code }, sim.status);
+    return json(
+      {
+        isValid: false,
+        invalidReason: sim.code,
+        payer: result.payment.fromAddr,
+        error: sim.error,
+        code: sim.code,
+      },
+      sim.status,
+    );
   }
 
   logUsage({ apiKeyId: keyRow.id, event: "verify_success" });

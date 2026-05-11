@@ -84,6 +84,7 @@ interface Authorization {
 }
 
 export interface PaymentRequestBody {
+  x402Version?: number;
   paymentPayload?: {
     x402Version?: number;
     scheme?: string;
@@ -203,6 +204,17 @@ export async function validatePayment(
       400,
       "invalid_x402_version",
       `Unsupported x402Version: ${version} (expected 1 or 2)`,
+    );
+  }
+
+  if (
+    body.x402Version !== undefined &&
+    body.x402Version !== version
+  ) {
+    return fail(
+      400,
+      "invalid_x402_version",
+      `Top-level x402Version (${body.x402Version}) does not match paymentPayload.x402Version (${version})`,
     );
   }
 

@@ -96,6 +96,7 @@ Both the short form and `/api/*` form resolve to the same handler (Vercel rewrit
 
 ```json
 {
+  "x402Version": 2,
   "paymentPayload": {
     "x402Version": 2,
     "scheme": "exact",
@@ -127,6 +128,8 @@ Both the short form and `/api/*` form resolve to the same handler (Vercel rewrit
 }
 ```
 
+The top-level `x402Version` is optional. If present, it must equal `paymentPayload.x402Version` or the request is rejected with `invalid_x402_version`. This mirrors the v2 canonical envelope while preserving v1-style callers that only set the inner version.
+
 ### Responses
 
 `POST /verify` 200:
@@ -138,10 +141,16 @@ Both the short form and `/api/*` form resolve to the same handler (Vercel rewrit
 `POST /settle` 200:
 
 ```json
-{ "success": true, "txHash": "0x<bytes32>", "network": "eip155:137" }
+{
+  "success": true,
+  "payer": "0x<address>",
+  "transaction": "0x<bytes32>",
+  "txHash": "0x<bytes32>",
+  "network": "eip155:137"
+}
 ```
 
-The `network` field echoes the chain the API key is bound to (`eip155:137` for Polygon, `eip155:80002` for Amoy).
+The `transaction` field is the v2 canonical name for the broadcast transaction hash; `txHash` is preserved as a legacy alias and will be removed in a future major version. Always read `transaction` for forward compatibility. The `network` field echoes the chain the API key is bound to (`eip155:137` for Polygon, `eip155:80002` for Amoy).
 
 `GET /health` 200:
 
@@ -270,11 +279,33 @@ The on-chain `authorizationState` check is the final replay guard, but it cannot
 | 500 | Internal failure (contract revert during settle broadcast) |
 | 503 | Service not configured, RPC unavailable, simulation timeout, or facilitator out of native balance |
 
-Error body:
+Error body (verify):
 
 ```json
-{ "error": "<human readable>", "code": "<error_code>" }
+{
+  "isValid": false,
+  "invalidReason": "<error_code>",
+  "payer": "0x<address>",
+  "error": "<human readable>",
+  "code": "<error_code>"
+}
 ```
+
+Error body (settle):
+
+```json
+{
+  "success": false,
+  "errorReason": "<error_code>",
+  "payer": "0x<address>",
+  "transaction": "",
+  "network": "eip155:137",
+  "error": "<human readable>",
+  "code": "<error_code>"
+}
+```
+
+`invalidReason` (verify) and `errorReason` (settle) are the v2 canonical machine-readable reason fields. The `code` field is a legacy alias and carries the same value; both will be set for backward compatibility. The `payer` field is included on errors only after the request has been parsed and `from` is known; for early errors (auth, JSON parse, unsupported chain) it is omitted.
 
 ### Error code catalog
 
@@ -299,8 +330,26 @@ Error body:
 | `facilitator_insufficient_native_balance` | 503 | Facilitator MATIC balance below estimated gas cost |
 | `rpc_unavailable` | 503 | RPC error reading authorizationState, balance, or gas price |
 
+## Compatibility with x402 v2 canonical wire format
+
+This facilitator targets the v2 specification at `github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md` and `docs.x402.org/core-concepts/facilitator`. Differences and compatibility policy:
+
+| Field | Canonical v2 | This facilitator | Policy |
+|---|---|---|---|
+| Request top-level `x402Version` | required | optional, but if present must match inner | accepts both v1-style and v2-style envelopes |
+| `/settle` success tx field | `transaction` | both `transaction` and `txHash` | `txHash` deprecated; remove in next major |
+| `/settle` success `payer` | required | included | matches |
+| `/verify` failure `invalidReason` | required (string) | included alongside legacy `code` | `code` deprecated; remove in next major |
+| `/settle` failure `errorReason` | required (string) | included alongside legacy `code` | `code` deprecated; remove in next major |
+| `payTo` dynamic per-request | supported by spec | rejected if not matching API key's bound recipient | intentional security choice — see "Authentication" |
+| `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE` headers | resource-server flow only | not applicable to facilitator HTTP API | n/a |
+
+The fixed-recipient model (binding `payTo` to the API key) is a deliberate divergence: a stolen API key cannot redirect funds to an attacker-controlled wallet. Clients that need dynamic recipients must use a different facilitator.
+
 ## References
 
 - x402: https://x402.org
+- x402 v2 specification: https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md
+- x402 facilitator concept: https://docs.x402.org/core-concepts/facilitator
 - EIP-3009: https://eips.ethereum.org/EIPS/eip-3009
 - EIP-712: https://eips.ethereum.org/EIPS/eip-712
