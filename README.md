@@ -301,3 +301,13 @@ The `x-api-key` header is hashed on each request and matched against `api_key_ha
 ## License
 
 MIT
+
+## Disclaimer
+
+> This project is an unofficial, individually-developed open source project. It is not an official content of JPYC Inc.
+> "JPYC" is a stablecoin provided by JPYC Inc.
+> "JPYC" and the JPYC logo are registered trademarks of JPYC Inc.
+>
+> ※ 本プロジェクトは個人開発による非公式のオープンソースプロジェクトです。JPYC 株式会社による公式コンテンツではありません。
+> ※ 「JPYC」は JPYC 株式会社の提供するステーブルコインです。
+> ※ JPYC 及び JPYC ロゴは、JPYC 株式会社の登録商標です。
