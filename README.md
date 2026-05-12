@@ -9,7 +9,7 @@ x402 facilitator for JPYC (JPY Coin) on Polygon. Lets HTTP APIs charge in JPYC a
 
 ## Endpoints
 
-Hosted at `https://x402-jpyc.vercel.app`. Both the short form and the `/api/*` form work (Vercel rewrites).
+Hosted at `https://yen402.com`. Both the short form and the `/api/*` form work (Vercel rewrites).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -37,7 +37,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/server";
 const app = express();
 
 const facilitatorClient = new HTTPFacilitatorClient({
-  url: "https://x402-jpyc.vercel.app",
+  url: "https://yen402.com",
 });
 
 const server = new x402ResourceServer(facilitatorClient).register(
@@ -175,7 +175,7 @@ console.log(await response.json());
 Validates a payment authorization. Does not broadcast.
 
 ```bash
-curl -X POST https://x402-jpyc.vercel.app/verify \
+curl -X POST https://yen402.com/verify \
   -H "Content-Type: application/json" \
   -H "x-api-key: YOUR_API_KEY" \
   -d '{
@@ -231,7 +231,7 @@ Response:
 Returns the recipient address registered for the API key.
 
 ```bash
-curl https://x402-jpyc.vercel.app/payment-info \
+curl https://yen402.com/payment-info \
   -H "x-api-key: YOUR_API_KEY"
 ```
 

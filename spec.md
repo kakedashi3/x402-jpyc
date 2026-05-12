@@ -9,7 +9,7 @@ Wire-level specification of the x402-jpyc facilitator. Authoritative source for 
 | Name | `x402-jpyc-facilitator` |
 | Protocol | x402 v2 |
 | Runtime | Vercel Edge Functions |
-| Base URL | `https://x402-jpyc.vercel.app` |
+| Base URL | `https://yen402.com` |
 
 ## Supported networks
 

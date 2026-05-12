@@ -9,7 +9,7 @@ Polygon 上の JPYC (JPY Coin) で動く x402 ファシリテーター。HTTP AP
 
 ## エンドポイント
 
-ホスト先: `https://x402-jpyc.vercel.app`。短い形式と `/api/*` 形式の両方が使えます（Vercel rewrites）。
+ホスト先: `https://yen402.com`。短い形式と `/api/*` 形式の両方が使えます（Vercel rewrites）。
 
 | Method | Path | 用途 |
 |---|---|---|
@@ -37,7 +37,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/server";
 const app = express();
 
 const facilitatorClient = new HTTPFacilitatorClient({
-  url: "https://x402-jpyc.vercel.app",
+  url: "https://yen402.com",
 });
 
 const server = new x402ResourceServer(facilitatorClient).register(
@@ -175,7 +175,7 @@ console.log(await response.json());
 支払い認可を検証する。ブロードキャストはしない。
 
 ```bash
-curl -X POST https://x402-jpyc.vercel.app/verify \
+curl -X POST https://yen402.com/verify \
   -H "Content-Type: application/json" \
   -H "x-api-key: YOUR_API_KEY" \
   -d '{
@@ -231,7 +231,7 @@ curl -X POST https://x402-jpyc.vercel.app/verify \
 API キーに登録された受取アドレスを返す。
 
 ```bash
-curl https://x402-jpyc.vercel.app/payment-info \
+curl https://yen402.com/payment-info \
   -H "x-api-key: YOUR_API_KEY"
 ```
 
