@@ -167,7 +167,7 @@ describe("validatePayment — success cases", () => {
     const body = await buildValidBody();
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(true);
@@ -180,7 +180,7 @@ describe("validatePayment — success cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(true);
@@ -194,7 +194,7 @@ describe("validatePayment — success cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(true);
@@ -204,7 +204,7 @@ describe("validatePayment — success cases", () => {
     const body = await buildValidBody({ x402Version: 1 });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(true);
@@ -254,7 +254,7 @@ describe("validatePayment — success cases", () => {
     };
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
       AMOY,
     );
@@ -265,7 +265,7 @@ describe("validatePayment — success cases", () => {
     const body = await buildValidBody(); // signed for Polygon (137)
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
       AMOY,
     );
@@ -314,7 +314,7 @@ describe("validatePayment — success cases", () => {
     };
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
       AMOY,
     );
@@ -345,7 +345,7 @@ describe("validatePayment — error cases", () => {
 
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -362,7 +362,7 @@ describe("validatePayment — error cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -376,7 +376,7 @@ describe("validatePayment — error cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -389,7 +389,7 @@ describe("validatePayment — error cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -403,7 +403,7 @@ describe("validatePayment — error cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -417,7 +417,7 @@ describe("validatePayment — error cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -429,7 +429,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody();
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -443,7 +443,7 @@ describe("validatePayment — error cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -455,7 +455,7 @@ describe("validatePayment — error cases", () => {
     body.paymentPayload!.payload!.authorization!.nonce = "0x00";
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -469,7 +469,7 @@ describe("validatePayment — error cases", () => {
       1000;
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -481,7 +481,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody();
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -494,7 +494,7 @@ describe("validatePayment — error cases", () => {
   it("invalid_request: missing payload entirely", async () => {
     const result = await validatePayment(
       { paymentPayload: { payload: {} } } as PaymentRequestBody,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -505,7 +505,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ x402Version: 99 });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -516,7 +516,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ payloadScheme: "approve" });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -527,7 +527,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ extraName: "Wrong Name" });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -540,7 +540,7 @@ describe("validatePayment — error cases", () => {
     });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -551,7 +551,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ scheme: "approve" });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -562,7 +562,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ network: "eip155:1" });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -573,7 +573,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ extraVersion: "2" });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -585,7 +585,7 @@ describe("validatePayment — error cases", () => {
     delete body.paymentPayload!.payload!.signature;
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -597,7 +597,7 @@ describe("validatePayment — error cases", () => {
     body.paymentPayload!.payload!.authorization!.from = "0xnotanaddress";
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -608,7 +608,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ asset: "0xnotanaddress" });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -620,7 +620,7 @@ describe("validatePayment — error cases", () => {
     body.paymentRequirements!.asset = undefined;
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -632,7 +632,7 @@ describe("validatePayment — error cases", () => {
     body.paymentRequirements!.payTo = undefined;
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -643,7 +643,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ payTo: "0xnotanaddress" });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -655,7 +655,7 @@ describe("validatePayment — error cases", () => {
     body.paymentRequirements!.amount = undefined;
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
@@ -666,7 +666,7 @@ describe("validatePayment — error cases", () => {
     const body = await buildValidBody({ value: "1", amount: "0" });
     const result = await validatePayment(
       body,
-      RECIPIENT_ADDRESS,
+      [RECIPIENT_ADDRESS],
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);

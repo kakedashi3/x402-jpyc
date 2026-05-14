@@ -1,22 +1,36 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 const mockSingle = vi.hoisted(() => vi.fn());
+const mockRecipients = vi.hoisted(() =>
+  vi.fn<() => Promise<{ data: Array<{ recipient_address: string }> | null }>>(),
+);
 const mockClaimNonce = vi.hoisted(() => vi.fn());
 const mockVerifyTypedData = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/supabase.js", () => ({
   supabase: {
-    from: () => ({
-      select: () => ({
-        eq: () => ({
+    from: (table: string) => {
+      if (table === "api_key_recipients") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => mockRecipients(),
+            }),
+          }),
+        };
+      }
+      return {
+        select: () => ({
           eq: () => ({
-            single: mockSingle,
+            eq: () => ({
+              single: mockSingle,
+            }),
           }),
         }),
-      }),
-      insert: () => Promise.resolve({ error: null }),
-      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
-    }),
+        insert: () => Promise.resolve({ error: null }),
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    },
   },
 }));
 
@@ -131,6 +145,9 @@ describe("POST /api/settle (EIP-3009)", () => {
       },
       error: null,
     });
+    // Default: no recipients table rows → handler falls back to
+    // api_keys.recipient_address as a single-element allowlist.
+    mockRecipients.mockResolvedValue({ data: null });
     mockClaimNonce.mockResolvedValue({ ok: true, mode: "normal" });
     mockVerifyTypedData.mockResolvedValue(true);
   });
@@ -314,5 +331,107 @@ describe("POST /api/settle (EIP-3009)", () => {
     expect(data.payer).toBe("0x1111111111111111111111111111111111111111");
     expect(data.transaction).toBe("");
     expect(data.network).toBe("eip155:137");
+  });
+
+  describe("allowlist (api_key_recipients)", () => {
+    const RECIPIENT_A = "0xAAaaAAAAAAaaaaaaaAaaaAaaAaAaAAaAAAaaAaAa";
+    const RECIPIENT_B = "0xBbbbbbbBBBbbBbBBbbbbbbBbBbbbbBBbbBBBbBBB";
+    const PRIMARY = "0x9999999999999999999999999999999999999999";
+
+    beforeEach(() => {
+      mockSingle.mockResolvedValue({
+        data: {
+          id: "key-id",
+          user_id: "user-id",
+          recipient_address: PRIMARY,
+          chain_id: 137,
+        },
+        error: null,
+      });
+      mockPublicClient.readContract.mockResolvedValue(false); // nonce unused
+      mockWalletClient.writeContract.mockResolvedValue(
+        "0xdeadbeef" as `0x${string}`,
+      );
+    });
+
+    it("settles to the matched recipient, not the api_keys primary", async () => {
+      mockRecipients.mockResolvedValue({
+        data: [
+          { recipient_address: RECIPIENT_A },
+          { recipient_address: RECIPIENT_B },
+        ],
+      });
+
+      const body = structuredClone(validBody);
+      body.paymentPayload.payload.authorization.to = RECIPIENT_A;
+      body.paymentRequirements.payTo = RECIPIENT_A;
+
+      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      expect(res.status).toBe(200);
+
+      // The on-chain `to` arg must be the matched recipient (A), not the
+      // api_keys primary. This is the whole point of the allowlist: each
+      // settlement goes to the specific seller the buyer paid, not a
+      // single house wallet.
+      const writeArgs = mockWalletClient.writeContract.mock.calls[0]?.[0];
+      expect(writeArgs).toBeDefined();
+      // args order: [from, to, value, validAfter, validBefore, nonce, v, r, s]
+      const toArg = writeArgs.args[1] as string;
+      expect(toArg.toLowerCase()).toBe(RECIPIENT_A.toLowerCase());
+      expect(toArg.toLowerCase()).not.toBe(PRIMARY.toLowerCase());
+    });
+
+    it("settles to recipient B when the buyer paid recipient B", async () => {
+      mockRecipients.mockResolvedValue({
+        data: [
+          { recipient_address: RECIPIENT_A },
+          { recipient_address: RECIPIENT_B },
+        ],
+      });
+
+      const body = structuredClone(validBody);
+      body.paymentPayload.payload.authorization.to = RECIPIENT_B;
+      body.paymentRequirements.payTo = RECIPIENT_B;
+
+      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      expect(res.status).toBe(200);
+
+      const writeArgs = mockWalletClient.writeContract.mock.calls[0]?.[0];
+      const toArg = writeArgs.args[1] as string;
+      expect(toArg.toLowerCase()).toBe(RECIPIENT_B.toLowerCase());
+    });
+
+    it("rejects settle when authorization.to is not in the allowlist", async () => {
+      mockRecipients.mockResolvedValue({
+        data: [{ recipient_address: RECIPIENT_A }],
+      });
+
+      const body = structuredClone(validBody);
+      body.paymentPayload.payload.authorization.to = RECIPIENT_B;
+      body.paymentRequirements.payTo = RECIPIENT_B;
+
+      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      expect(res.status).toBe(400);
+      const data: any = await res.json();
+      expect(data.errorReason).toBe("invalid_pay_to");
+      expect(data.error).toContain("allowlist");
+      // Must not have called writeContract on a rejected settle.
+      expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+    });
+
+    it("rejects settle to the primary when allowlist is populated and excludes it", async () => {
+      mockRecipients.mockResolvedValue({
+        data: [{ recipient_address: RECIPIENT_A }],
+      });
+
+      // validBody pays to 0x2222... which is neither A nor PRIMARY.
+      const res = await handler(
+        makeRequest({ apiKey: "test-secret", body: validBody }),
+      );
+      expect(res.status).toBe(400);
+      const data: any = await res.json();
+      expect(data.errorReason).toBe("invalid_pay_to");
+      expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+    });
   });
 });

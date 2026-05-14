@@ -1,21 +1,35 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
 const mockSingle = vi.hoisted(() => vi.fn());
+const mockRecipients = vi.hoisted(() =>
+  vi.fn<() => Promise<{ data: Array<{ recipient_address: string }> | null }>>(),
+);
 const mockVerifyTypedData = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/supabase.js", () => ({
   supabase: {
-    from: () => ({
-      select: () => ({
-        eq: () => ({
+    from: (table: string) => {
+      if (table === "api_key_recipients") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => mockRecipients(),
+            }),
+          }),
+        };
+      }
+      return {
+        select: () => ({
           eq: () => ({
-            single: mockSingle,
+            eq: () => ({
+              single: mockSingle,
+            }),
           }),
         }),
-      }),
-      insert: () => Promise.resolve({ error: null }),
-      update: () => ({ eq: () => Promise.resolve({ error: null }) }),
-    }),
+        insert: () => Promise.resolve({ error: null }),
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    },
   },
 }));
 
@@ -125,6 +139,9 @@ describe("POST /api/verify (EIP-3009)", () => {
       },
       error: null,
     });
+    // Default: no recipients table rows → handler falls back to
+    // api_keys.recipient_address as a single-element allowlist.
+    mockRecipients.mockResolvedValue({ data: null });
     mockVerifyTypedData.mockResolvedValue(true);
     mockPublicClient.simulateContract.mockResolvedValue({ result: undefined });
     mockPublicClient.estimateContractGas.mockResolvedValue(80_000n);
@@ -294,5 +311,93 @@ describe("POST /api/verify (EIP-3009)", () => {
     // v2 canonical: error responses now include isValid:false
     expect(data.isValid).toBe(false);
     expect(data.invalidReason).toBe("invalid_signature");
+  });
+
+  describe("allowlist (api_key_recipients)", () => {
+    const RECIPIENT_A = "0xAAaaAAAAAAaaaaaaaAaaaAaaAaAaAAaAAAaaAaAa";
+    const RECIPIENT_B = "0xBbbbbbbBBBbbBbBBbbbbbbBbBbbbbBBbbBBBbBBB";
+
+    beforeEach(() => {
+      // Different primary than what the allowlist will hold — this proves
+      // the handler reads from api_key_recipients, not from
+      // api_keys.recipient_address, when the allowlist is populated.
+      mockSingle.mockResolvedValue({
+        data: {
+          id: "key-id",
+          user_id: "user-id",
+          recipient_address: "0x9999999999999999999999999999999999999999",
+          chain_id: 137,
+        },
+        error: null,
+      });
+      mockPublicClient.readContract.mockResolvedValue(false); // nonce unused
+    });
+
+    it("accepts payment to recipient A registered in the allowlist", async () => {
+      mockRecipients.mockResolvedValue({
+        data: [
+          { recipient_address: RECIPIENT_A },
+          { recipient_address: RECIPIENT_B },
+        ],
+      });
+
+      const body = structuredClone(validBody);
+      body.paymentPayload.payload.authorization.to = RECIPIENT_A;
+      body.paymentRequirements.payTo = RECIPIENT_A;
+
+      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      expect(res.status).toBe(200);
+      const data: any = await res.json();
+      expect(data.isValid).toBe(true);
+    });
+
+    it("accepts payment to recipient B (same key, different recipient)", async () => {
+      mockRecipients.mockResolvedValue({
+        data: [
+          { recipient_address: RECIPIENT_A },
+          { recipient_address: RECIPIENT_B },
+        ],
+      });
+
+      const body = structuredClone(validBody);
+      body.paymentPayload.payload.authorization.to = RECIPIENT_B;
+      body.paymentRequirements.payTo = RECIPIENT_B;
+
+      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      expect(res.status).toBe(200);
+      const data: any = await res.json();
+      expect(data.isValid).toBe(true);
+    });
+
+    it("rejects payment to an address not in the allowlist", async () => {
+      mockRecipients.mockResolvedValue({
+        data: [{ recipient_address: RECIPIENT_A }],
+      });
+
+      const body = structuredClone(validBody);
+      body.paymentPayload.payload.authorization.to = RECIPIENT_B;
+      body.paymentRequirements.payTo = RECIPIENT_B;
+
+      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      expect(res.status).toBe(400);
+      const data: any = await res.json();
+      expect(data.invalidReason).toBe("invalid_pay_to");
+      expect(data.error).toContain("allowlist");
+    });
+
+    it("rejects payment when allowlist is populated but primary is not in it", async () => {
+      // Primary is 0x9999..., allowlist holds A only. Payment to primary
+      // should fail because the allowlist overrides the primary fallback
+      // when it has at least one row.
+      mockRecipients.mockResolvedValue({
+        data: [{ recipient_address: RECIPIENT_A }],
+      });
+
+      const body = structuredClone(validBody); // pays to 0x2222...
+      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      expect(res.status).toBe(400);
+      const data: any = await res.json();
+      expect(data.invalidReason).toBe("invalid_pay_to");
+    });
   });
 });

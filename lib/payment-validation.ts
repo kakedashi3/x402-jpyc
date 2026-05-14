@@ -184,7 +184,7 @@ export function splitEip3009Signature(sig: Hex): {
 
 export async function validatePayment(
   body: PaymentRequestBody,
-  recipientAddress: Address,
+  allowlist: readonly Address[],
   publicClient: PublicClient,
   chain: ChainConfig = POLYGON,
 ): Promise<ValidationResult> {
@@ -322,18 +322,18 @@ export async function validatePayment(
       "Invalid paymentRequirements.payTo address",
     );
   }
-  if (declaredPayTo !== recipientAddress) {
+  if (!allowlist.includes(declaredPayTo)) {
     return fail(
       400,
       "invalid_pay_to",
-      "paymentRequirements.payTo does not match registered payTo address",
+      "paymentRequirements.payTo is not in registered payTo allowlist",
     );
   }
-  if (toAddr !== recipientAddress) {
+  if (!allowlist.includes(toAddr)) {
     return fail(
       400,
       "invalid_pay_to",
-      "Authorization 'to' does not match registered payTo address",
+      "Authorization 'to' is not in registered payTo allowlist",
     );
   }
 

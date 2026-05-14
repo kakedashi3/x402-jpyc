@@ -36,7 +36,7 @@ export default async function handler(req: Request): Promise<Response> {
   const keyHash = await hashApiKey(providedKey);
   const { data: keyRow, error: keyError } = await supabase
     .from("api_keys")
-    .select("recipient_address, chain_id")
+    .select("id, recipient_address, chain_id")
     .eq("api_key_hash", keyHash)
     .eq("is_active", true)
     .single();
@@ -56,8 +56,34 @@ export default async function handler(req: Request): Promise<Response> {
     throw err;
   }
 
+  // Fetch the active recipient allowlist. recipientAddress (singular) is
+  // kept for backwards compatibility — clients that have not migrated to
+  // recipients[] yet keep seeing the primary key recipient. Inactive rows
+  // are intentionally excluded so disabling a recipient hides it from
+  // downstream tooling immediately.
+  const { data: recipientRows } = await supabase
+    .from("api_key_recipients")
+    .select("recipient_address, label, is_active, created_at")
+    .eq("api_key_id", keyRow.id)
+    .eq("is_active", true)
+    .order("created_at", { ascending: true });
+
+  type RecipientRow = {
+    recipient_address: string;
+    label: string;
+    is_active: boolean;
+    created_at: string;
+  };
+  const recipients = (recipientRows ?? []).map((r: RecipientRow) => ({
+    address: getAddress(r.recipient_address),
+    label: r.label,
+    isActive: r.is_active,
+    createdAt: r.created_at,
+  }));
+
   return json({
     recipientAddress: getAddress(keyRow.recipient_address),
+    recipients,
     network: chain.networkId,
     chainId: chain.chainId,
     token: chain.jpycAddress,

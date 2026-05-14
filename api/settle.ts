@@ -63,7 +63,22 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: "Unauthorized" }, 401);
   }
 
-  const recipientAddress: Address = getAddress(keyRow.recipient_address);
+  // Resolve the allowlist of payTo addresses for this api_key. Prefer the
+  // api_key_recipients table; fall back to api_keys.recipient_address for
+  // rows that pre-date the backfill or somehow skipped it.
+  const { data: recipientRows } = await supabase
+    .from("api_key_recipients")
+    .select("recipient_address")
+    .eq("api_key_id", keyRow.id)
+    .eq("is_active", true);
+
+  const allowlist: Address[] =
+    recipientRows && recipientRows.length > 0
+      ? recipientRows.map((r: { recipient_address: string }) =>
+          getAddress(r.recipient_address),
+        )
+      : [getAddress(keyRow.recipient_address)];
+
   const requestedChainId = (keyRow.chain_id as number | null) ?? 137;
 
   let chain: ChainConfig;
@@ -118,7 +133,7 @@ export default async function handler(req: Request): Promise<Response> {
 
   const result = await validatePayment(
     body,
-    recipientAddress,
+    allowlist,
     publicClient,
     chain,
   );
@@ -136,7 +151,7 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const { fromAddr, value, validAfter, validBefore, nonce, signature } =
+  const { fromAddr, toAddr, value, validAfter, validBefore, nonce, signature } =
     result.payment;
 
   // Claim nonce in Redis (prevents TOCTOU between concurrent settle calls).
@@ -208,7 +223,7 @@ export default async function handler(req: Request): Promise<Response> {
       functionName: "transferWithAuthorization",
       args: [
         fromAddr,
-        recipientAddress,
+        toAddr,
         value,
         validAfter,
         validBefore,
@@ -229,7 +244,7 @@ export default async function handler(req: Request): Promise<Response> {
         txHash,
         amount: value.toString(),
         asset: chain.jpycAddress,
-        payTo: recipientAddress,
+        payTo: toAddr,
         from: fromAddr,
         network: chain.networkId,
         timestamp: now,
