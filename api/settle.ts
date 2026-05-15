@@ -20,6 +20,7 @@ import {
   validatePayment,
   type PaymentRequestBody,
 } from "../lib/payment-validation.js";
+import { notifyTagamie } from "../lib/tagamie-webhook.js";
 
 const _facilitatorAccount = getFacilitatorAccount();
 
@@ -252,6 +253,19 @@ export default async function handler(req: Request): Promise<Response> {
     );
 
     logUsage({ apiKeyId: keyRow.id, event: "settle_success", createdAt: now });
+
+    // Mainnet only — Tagamie's chain enum doesn't include testnets.
+    if (chain.name === "polygon") {
+      await notifyTagamie({
+        txHash,
+        chain: "polygon",
+        payTo: toAddr,
+        payer: fromAddr,
+        amountMinor: value.toString(),
+        asset: "JPYC",
+        occurredAt: now,
+      });
+    }
 
     return json(
       {
