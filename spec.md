@@ -15,12 +15,17 @@ Wire-level specification of the x402-jpyc facilitator. Authoritative source for 
 
 | Chain | `chain_id` | x402 `network` | RPC env var | JPYC contract | Decimals | Use case |
 |---|---|---|---|---|---|---|
+| Ethereum | `1` | `eip155:1` | `ETHEREUM_RPC_URL` | `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` | 18 | Production |
 | Polygon | `137` | `eip155:137` | `POLYGON_RPC_URL` | `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` | 18 | Production |
 | Polygon Amoy | `80002` | `eip155:80002` | `AMOY_RPC_URL` | `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` | 18 | Testnet |
+| Avalanche C-Chain | `43114` | `eip155:43114` | `AVALANCHE_RPC_URL` | `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` | 18 | Production |
+| Kaia | `8217` | `eip155:8217` | `KAIA_RPC_URL` | `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` | 18 | Production |
 
-JPYC is deployed at the same proxy address on both chains (deterministic deployment); the implementation behind both proxies exposes EIP-3009 `transferWithAuthorization` with the EIP-712 domain `name="JPY Coin", version="1"`.
+JPYC is deployed at the same proxy address on all five chains (deterministic / cross-chain mirrored deployment); each implementation exposes EIP-3009 `transferWithAuthorization` with the EIP-712 domain `name="JPY Coin", version="1"` and 18 decimals.
 
-API keys are bound to a single chain via `api_keys.chain_id`. A key issued for Amoy cannot settle on Polygon and vice versa; the request's `paymentRequirements.network` must match the key's chain or the response is `400 invalid_chain_id`. Migration: `migrations/001_add_chain_id_to_api_keys.sql`.
+> Operational note: code-level support does not imply mainnet liquidity. To actually settle on Ethereum / Avalanche / Kaia, the facilitator wallet (`FACILITATOR_PRIVATE_KEY`) must additionally hold native gas (ETH / AVAX / KAIA) on that chain. The buyer also needs a JPYC balance on the target chain at sign time; otherwise `simulateContract` will revert and `/verify` returns `simulation_failed`. Until those preconditions are met per chain, only Polygon mainnet is end-to-end live.
+
+API keys are bound to a single chain via `api_keys.chain_id`. A key issued for one chain cannot settle on another; the request's `paymentRequirements.network` must match the key's chain or the response is `400 invalid_chain_id`. Migrations: `migrations/001_add_chain_id_to_api_keys.sql` (initial binding, 137/80002) and `migrations/003_extend_supported_chains.sql` (admits 1, 43114, 8217).
 
 ## Asset
 
@@ -150,7 +155,7 @@ The top-level `x402Version` is optional. If present, it must equal `paymentPaylo
 }
 ```
 
-The `transaction` field is the v2 canonical name for the broadcast transaction hash; `txHash` is preserved as a legacy alias and will be removed in a future major version. Always read `transaction` for forward compatibility. The `network` field echoes the chain the API key is bound to (`eip155:137` for Polygon, `eip155:80002` for Amoy).
+The `transaction` field is the v2 canonical name for the broadcast transaction hash; `txHash` is preserved as a legacy alias and will be removed in a future major version. Always read `transaction` for forward compatibility. The `network` field echoes the chain the API key is bound to (one of `eip155:1`, `eip155:137`, `eip155:80002`, `eip155:43114`, `eip155:8217`).
 
 `GET /health` 200:
 
@@ -159,8 +164,11 @@ The `transaction` field is the v2 canonical name for the broadcast transaction h
   "status": "ok",
   "service": "x402-jpyc-facilitator",
   "networks": [
+    { "chainId": 1,     "network": "eip155:1",     "name": "ethereum" },
     { "chainId": 137,   "network": "eip155:137",   "name": "polygon" },
-    { "chainId": 80002, "network": "eip155:80002", "name": "amoy" }
+    { "chainId": 80002, "network": "eip155:80002", "name": "amoy" },
+    { "chainId": 43114, "network": "eip155:43114", "name": "avalanche" },
+    { "chainId": 8217,  "network": "eip155:8217",  "name": "kaia" }
   ],
   "asset": "JPYC",
   "timestamp": "<ISO8601>"

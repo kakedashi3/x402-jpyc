@@ -259,8 +259,12 @@ curl https://yen402.com/payment-info \
 
 | Variable | Required | Description |
 |---|---|---|
-| `FACILITATOR_PRIVATE_KEY` | Yes | Wallet private key used to broadcast `transferWithAuthorization` |
-| `POLYGON_RPC_URL` | Yes | Polygon RPC endpoint (Alchemy / QuickNode recommended) |
+| `FACILITATOR_PRIVATE_KEY` | Yes | Wallet private key used to broadcast `transferWithAuthorization`. Must hold native gas on every chain you intend to settle on (MATIC / ETH / AVAX / KAIA). |
+| `POLYGON_RPC_URL` | Yes | Polygon mainnet RPC endpoint (Alchemy / QuickNode recommended) |
+| `AMOY_RPC_URL` | Optional | Polygon Amoy testnet RPC endpoint |
+| `ETHEREUM_RPC_URL` | Optional | Ethereum mainnet RPC endpoint. Required only if any API key is bound to `chain_id = 1`. |
+| `AVALANCHE_RPC_URL` | Optional | Avalanche C-Chain RPC endpoint. Required only if any API key is bound to `chain_id = 43114`. |
+| `KAIA_RPC_URL` | Optional | Kaia mainnet RPC endpoint (`https://public-en.node.kaia.io` works). Required only if any API key is bound to `chain_id = 8217`. |
 | `SUPABASE_URL` | Yes | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server-side only) |
 | `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST URL for nonce replay protection |
@@ -283,7 +287,8 @@ The `x-api-key` header is hashed on each request and matched against `api_key_ha
 
 - JPYC (JPY Coin) settlement uses EIP-3009 `transferWithAuthorization(...)`.
 - The facilitator is the relayer; the payer signs an EIP-712 typed authorization off-chain.
-- EIP-712 domain: `name: "JPY Coin"`, `version: "1"`, `chainId: 137`.
+- EIP-712 domain: `name: "JPY Coin"`, `version: "1"`. `chainId` is the chain the API key is bound to (`1`, `137`, `80002`, `43114`, or `8217`).
+- Supported chains: Ethereum (`1`), Polygon (`137`), Polygon Amoy (`80002`, testnet), Avalanche (`43114`), Kaia (`8217`). JPYC shares the proxy address `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` and 18 decimals on every chain. See `spec.md` for the wire-level table.
 - Nonce replay protection: atomic `SET NX + TTL` in Upstash Redis, scoped by `chain:contract:from:nonce`. The TTL is derived from `validBefore`. On Redis unavailability the service fails open and the on-chain `authorizationState` check remains the final guard.
 - `/settle` returns `txHash` immediately after broadcast.
 - Runtime: Vercel Edge Functions.

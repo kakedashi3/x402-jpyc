@@ -255,10 +255,12 @@ export default async function handler(req: Request): Promise<Response> {
     logUsage({ apiKeyId: keyRow.id, event: "settle_success", createdAt: now });
 
     // Mainnet only — Tagamie's chain enum doesn't include testnets.
-    if (chain.name === "polygon") {
+    // isMainnet filters out amoy at runtime; the cast tells TS that
+    // chain.name is one of Tagamie's accepted mainnet names.
+    if (chain.isMainnet) {
       await notifyTagamie({
         txHash,
-        chain: "polygon",
+        chain: chain.name as "polygon" | "ethereum" | "avalanche" | "kaia",
         payTo: toAddr,
         payer: fromAddr,
         amountMinor: value.toString(),

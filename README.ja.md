@@ -259,8 +259,12 @@ curl https://yen402.com/payment-info \
 
 | 変数 | 必須 | 説明 |
 |---|---|---|
-| `FACILITATOR_PRIVATE_KEY` | Yes | `transferWithAuthorization` をブロードキャストするウォレット秘密鍵 |
-| `POLYGON_RPC_URL` | Yes | Polygon RPC エンドポイント（Alchemy / QuickNode 推奨） |
+| `FACILITATOR_PRIVATE_KEY` | Yes | `transferWithAuthorization` をブロードキャストするウォレット秘密鍵。決済を行う各チェーンでネイティブガス (MATIC / ETH / AVAX / KAIA) を保有している必要がある。 |
+| `POLYGON_RPC_URL` | Yes | Polygon mainnet RPC エンドポイント（Alchemy / QuickNode 推奨） |
+| `AMOY_RPC_URL` | Optional | Polygon Amoy testnet RPC エンドポイント |
+| `ETHEREUM_RPC_URL` | Optional | Ethereum mainnet RPC エンドポイント。`chain_id = 1` の API key を発行する場合のみ必須。 |
+| `AVALANCHE_RPC_URL` | Optional | Avalanche C-Chain RPC エンドポイント。`chain_id = 43114` の API key を発行する場合のみ必須。 |
+| `KAIA_RPC_URL` | Optional | Kaia mainnet RPC エンドポイント (`https://public-en.node.kaia.io` で動作)。`chain_id = 8217` の API key を発行する場合のみ必須。 |
 | `SUPABASE_URL` | Yes | Supabase プロジェクト URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase サービスロールキー（サーバーサイド専用） |
 | `UPSTASH_REDIS_REST_URL` | Yes | nonce リプレイ保護用の Upstash Redis REST URL |
@@ -283,7 +287,9 @@ API キーは Supabase の `api_keys` テーブルで管理：
 
 - JPYC (JPY Coin) の決済は EIP-3009 `transferWithAuthorization(...)` を使う。
 - ファシリテーターはリレーヤーで、支払い者は EIP-712 typed data にオフチェーン署名する。
-- EIP-712 ドメイン: `name: "JPY Coin"`, `version: "1"`, `chainId: 137`。
+- EIP-712 ドメイン: `name: "JPY Coin"`, `version: "1"`。`chainId` は API key が紐付くチェーン (`1` / `137` / `80002` / `43114` / `8217`)。
+- 対応チェーン: Ethereum (`1`) / Polygon (`137`) / Polygon Amoy (`80002`、testnet) / Avalanche (`43114`) / Kaia (`8217`)。JPYC は全チェーンで同一プロキシアドレス `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29`、18 decimals。詳細は `spec.md` 参照。
+- ⚠️ コード対応とメインネット運用は別。Ethereum / Avalanche / Kaia で実 settle するには facilitator wallet にネイティブガス + 買い手側に JPYC 残高が必要。揃うまで `/verify` の `simulateContract` が revert し `simulation_failed` を返す。Polygon mainnet 以外は「準備完了次第稼働」状態。
 - nonce リプレイ保護は Upstash Redis での atomic な `SET NX + TTL`。キースコープは `chain:contract:from:nonce`、TTL は `validBefore` から算出。Redis 障害時は fail open し、オンチェーンの `authorizationState` チェックが最終防衛ラインとして機能し続ける。
 - `/settle` はブロードキャスト直後に `txHash` を返す。
 - ランタイム: Vercel Edge Functions。

@@ -3,7 +3,7 @@
 
 export interface TagamieWebhookPayload {
   txHash: string;
-  chain: "polygon" | "base" | "ethereum";
+  chain: "polygon" | "base" | "ethereum" | "avalanche" | "kaia";
   payTo: string;
   payer: string;
   amountMinor: string;
