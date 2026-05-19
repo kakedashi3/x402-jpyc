@@ -87,8 +87,20 @@ export interface PaymentRequestBody {
   x402Version?: number;
   paymentPayload?: {
     x402Version?: number;
+    /** v1 wire envelope: scheme/network are top-level fields. */
     scheme?: string;
     network?: string;
+    /** v2 wire envelope: scheme/network are nested under `accepted`. */
+    accepted?: {
+      scheme?: string;
+      network?: string;
+      asset?: string;
+      payTo?: string;
+      extra?: {
+        name?: string;
+        version?: string;
+      };
+    };
     payload?: {
       signature?: string;
       authorization?: Authorization;
@@ -182,6 +194,21 @@ export function splitEip3009Signature(sig: Hex): {
   return { v: 27 + parsed.yParity, r: parsed.r, s: parsed.s };
 }
 
+/**
+ * Resolve scheme/network from a paymentPayload regardless of wire format.
+ * v1 keeps them top-level. v2 nests them under `accepted`. We prefer the
+ * top-level value when both are present (callers shouldn't disagree, but
+ * if they do we trust the more explicit one).
+ */
+function resolveSchemeAndNetwork(
+  paymentPayload: NonNullable<PaymentRequestBody["paymentPayload"]>,
+): { scheme: string | undefined; network: string | undefined } {
+  return {
+    scheme: paymentPayload.scheme ?? paymentPayload.accepted?.scheme,
+    network: paymentPayload.network ?? paymentPayload.accepted?.network,
+  };
+}
+
 export async function validatePayment(
   body: PaymentRequestBody,
   allowlist: readonly Address[],
@@ -218,11 +245,16 @@ export async function validatePayment(
     );
   }
 
-  if (paymentPayload.scheme !== chain.scheme) {
+  // v1 puts scheme/network at the top of paymentPayload; v2 nests them under
+  // `accepted`. Resolve from either shape so both wire versions validate cleanly.
+  const { scheme: payloadScheme, network: payloadNetwork } =
+    resolveSchemeAndNetwork(paymentPayload);
+
+  if (payloadScheme !== chain.scheme) {
     return fail(
       400,
       "invalid_scheme",
-      `Unsupported paymentPayload.scheme: ${paymentPayload.scheme} (expected ${chain.scheme})`,
+      `Unsupported paymentPayload.scheme: ${payloadScheme} (expected ${chain.scheme})`,
     );
   }
   if (paymentRequirements.scheme !== chain.scheme) {
@@ -233,11 +265,11 @@ export async function validatePayment(
     );
   }
 
-  if (paymentPayload.network !== chain.networkId) {
+  if (payloadNetwork !== chain.networkId) {
     return fail(
       400,
       "invalid_chain_id",
-      `Unsupported paymentPayload.network: ${paymentPayload.network} (expected ${chain.networkId})`,
+      `Unsupported paymentPayload.network: ${payloadNetwork} (expected ${chain.networkId})`,
     );
   }
   if (paymentRequirements.network !== chain.networkId) {

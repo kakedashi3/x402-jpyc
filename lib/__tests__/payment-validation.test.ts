@@ -210,6 +210,33 @@ describe("validatePayment — success cases", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("ok: v2 wire with scheme/network nested under `accepted`", async () => {
+    // v2 envelope: instead of paymentPayload.scheme / .network at the top level,
+    // they sit under paymentPayload.accepted. Validator must resolve from either.
+    const v1Body = await buildValidBody({ x402Version: 2 });
+    const v2Body: PaymentRequestBody = {
+      ...v1Body,
+      paymentPayload: {
+        x402Version: 2,
+        accepted: {
+          scheme: v1Body.paymentPayload!.scheme!,
+          network: v1Body.paymentPayload!.network!,
+          asset: v1Body.paymentRequirements!.asset,
+          payTo: v1Body.paymentRequirements!.payTo,
+          extra: v1Body.paymentRequirements!.extra,
+        },
+        // Note: NO top-level scheme/network — the validator must read `accepted`.
+        payload: v1Body.paymentPayload!.payload!,
+      },
+    };
+    const result = await validatePayment(
+      v2Body,
+      [RECIPIENT_ADDRESS],
+      asPublicClient(client),
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it("ok: Amoy chain (80002) when chain config matches", async () => {
     const validBefore = String(Number(nowSec()) + 3600);
     const value = "1000000000000000000";
