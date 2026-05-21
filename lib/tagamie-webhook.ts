@@ -1,6 +1,8 @@
 // Best-effort notification to Tagamie's /api/webhooks/settle.
 // Failures are logged but never propagated — settle response is the source of truth.
 
+import type { CrossLayerContext } from "./cross-layer-context.js";
+
 export interface TagamieWebhookPayload {
   txHash: string;
   chain: "polygon" | "base" | "ethereum" | "avalanche" | "kaia";
@@ -12,6 +14,12 @@ export interface TagamieWebhookPayload {
   blockNumber?: string;
   resource?: string;
   occurredAt: string;
+  /**
+   * Cross-Layer Context v1 (knowledge/cross-layer-context.md).
+   * Forwarded opaquely from the settle request body — facilitator does not
+   * validate or transform it. Tagamie applies its own schema check on receipt.
+   */
+  context?: CrossLayerContext;
 }
 
 export async function notifyTagamie(

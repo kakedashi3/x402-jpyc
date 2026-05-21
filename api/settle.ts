@@ -258,6 +258,15 @@ export default async function handler(req: Request): Promise<Response> {
     // isMainnet filters out amoy at runtime; the cast tells TS that
     // chain.name is one of Tagamie's accepted mainnet names.
     if (chain.isMainnet) {
+      // Cross-Layer Context v1: forwarded opaquely if the caller included it
+      // in the settle request body. Facilitator does no inner validation.
+      // Tagamie applies its own Zod schema on receipt
+      // (app/api/webhooks/settle/route.ts crossLayerContextSchema).
+      const ctx =
+        body.context && typeof body.context === "object"
+          ? (body.context as import("../lib/cross-layer-context.js").CrossLayerContext)
+          : undefined;
+
       await notifyTagamie({
         txHash,
         chain: chain.name as "polygon" | "ethereum" | "avalanche" | "kaia",
@@ -266,6 +275,7 @@ export default async function handler(req: Request): Promise<Response> {
         amountMinor: value.toString(),
         asset: "JPYC",
         occurredAt: now,
+        context: ctx,
       });
     }
 

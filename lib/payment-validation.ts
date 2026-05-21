@@ -117,6 +117,12 @@ export interface PaymentRequestBody {
       version?: string;
     };
   };
+  /**
+   * Cross-Layer Context v1 (knowledge/cross-layer-context.md). Forwarded
+   * opaquely to Tagamie's settle webhook. The facilitator does not interpret
+   * the inner structure; missing field is the default for legacy callers.
+   */
+  context?: unknown;
 }
 
 export interface ValidatedPayment {
