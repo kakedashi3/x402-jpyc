@@ -10,6 +10,7 @@
  */
 
 import { generateJwt } from "@coinbase/cdp-sdk/auth";
+import { redactId } from "../lib/redact.js";
 
 const HOST = "api.cdp.coinbase.com";
 const PATH = "/platform/v2/x402/verify";
@@ -69,7 +70,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Key ID : ${apiKeyId}`);
+  console.log(`Key ID : ${redactId(apiKeyId)}`);
   console.log(`Target : POST ${URL}`);
   console.log(`Asset  : ${BODY.paymentRequirements.asset} (JPYC on Polygon)\n`);
 

@@ -1,4 +1,5 @@
 import { waitUntil } from "@vercel/functions";
+import { redactId } from "./redact.js";
 import { supabase } from "./supabase.js";
 
 /**
@@ -45,7 +46,7 @@ export function logUsage(evt: UsageEventInput): void {
       console.error(
         JSON.stringify({
           event: "usage_log_failed",
-          apiKeyId: evt.apiKeyId,
+          apiKeyId: redactId(evt.apiKeyId),
           usageEvent: evt.event,
           error: err instanceof Error ? err.message : String(err),
         }),
