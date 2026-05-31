@@ -6,3 +6,4 @@ node_modules/
 # Compiled output
 dist
 coverage
+.DS_Store
