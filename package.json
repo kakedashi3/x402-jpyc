@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@coinbase/cdp-sdk": "^1.51.0",
-    "@types/node": "^25.9.1",
+    "@types/node": "^25.9.3",
     "@vercel/node": "^5.8.12",
     "@vitest/coverage-v8": "^4.1.8",
     "tsx": "^4.22.4",
