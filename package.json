@@ -17,7 +17,7 @@
     "@upstash/redis": "^1.38.0",
     "@vercel/functions": "^3.7.3",
     "bs58": "^6.0.0",
-    "viem": "^2.53.1"
+    "viem": "^2.54.2"
   },
   "devDependencies": {
     "@coinbase/cdp-sdk": "^1.51.2",
