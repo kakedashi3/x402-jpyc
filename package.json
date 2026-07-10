@@ -13,7 +13,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.110.0",
+    "@supabase/supabase-js": "^2.110.2",
     "@upstash/redis": "^1.38.0",
     "@vercel/functions": "^3.7.5",
     "bs58": "^6.0.0",
