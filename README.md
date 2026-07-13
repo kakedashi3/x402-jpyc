@@ -36,19 +36,29 @@ yen402 sponsors the gas for every settlement, so the subsidy is bounded — and 
 | Sponsored gas | **per chain** — see below | The hard bound on what an anonymous caller can cost us |
 | Minimum settlement | ¥1 | Keeps sponsored gas a small fraction of the payment |
 
-**The gas budget is per chain, because gas is not comparable across chains.** One settlement costs roughly ¥0.06 on Polygon and **¥252 on Ethereum**.
+**The gas budget is per chain, because gas is not comparable across chains.**
 
-| Chain | Sponsored settlements/day | ≈ daily exposure |
-|---|---|---|
-| Polygon (`eip155:137`) | 5,000 | ¥300 |
-| Kaia (`eip155:8217`) | 5,000 | ¥150 |
-| Polygon Amoy (testnet) | 5,000 | — |
-| Ethereum (`eip155:1`) | **not offered** | — |
-| Avalanche (`eip155:43114`) | **not offered** | — |
+| Chain | Sponsored settlements/day |
+|---|---|
+| Polygon (`eip155:137`) | 5,000 |
+| Kaia (`eip155:8217`) | 5,000 |
+| Polygon Amoy (testnet) | 5,000 |
+| Ethereum (`eip155:1`) | **not offered** |
+| Avalanche (`eip155:43114`) | **not offered** |
 
-**Ethereum and Avalanche are not offered on the public instance.** The code settles there fine — but sponsoring ¥252 of L1 gas to move a ¥100 micropayment is a leak, not a service, and JPYC's real x402 volume is on Polygon and Kaia. `/settle` on those networks returns `network_not_offered` rather than letting you discover it as a failed broadcast. Self-host and set `DAILY_SETTLE_BUDGET_1` to enable them.
+**Ethereum and Avalanche are not offered on the public instance.** The code settles there fine — but L1 gas costs orders of magnitude more than the micropayments x402 exists for, and JPYC's real x402 volume is on Polygon and Kaia. `/settle` on those networks returns `network_not_offered` rather than letting you discover it as a failed broadcast. Self-host and set `DAILY_SETTLE_BUDGET_1` to enable them.
 
-`GET /supported` reports what the facilitator can **actually** do right now — `available` is read from the hot wallet's gas balance on each chain, not from this table. If we cannot pay, we say so (`insufficient_facilitator_gas`) instead of failing at the moment money moves.
+### The real bound is the wallet, not the budget
+
+The daily budget caps the *rate*. What actually bounds a stranger's cost to us is **the gas we choose to put in the facilitator wallet** — and `/settle` checks that it can pay before it reserves budget or broadcasts.
+
+So do not trust a number printed in this README: gas prices move, and an earlier version of this file was wrong by 9x about Polygon. **[`GET /supported`](https://yen402.com/supported) is the source of truth.** It reports, per network, read live from the chain:
+
+- `available` — whether we can settle there at all right now
+- `sponsoredGas.settlementsAffordable` — how many settlements the wallet can still pay for
+- `unavailableReason` — `not_offered`, or `insufficient_facilitator_gas` when we are out
+
+If we cannot pay, we say so. We do not let you find out at the moment money moves.
 
 Need more? Don't ask for a quota — **run your own**. The facilitator is MIT-licensed and deploys to Vercel in minutes (see *Self-hosting*). Set `MIN_SETTLE_JPYC=0` for sub-yen payments and `DAILY_SETTLE_BUDGET_<chainId>` for whatever your own wallet can bear.
 

@@ -28,15 +28,24 @@ export const JPYC = {
  *
  * The facilitator pays the on-chain gas, so an amount worth less than that gas
  * is a pure subsidy drain. But x402 exists FOR micropayments (pay-per-call,
- * pay-per-crawl), so this floor has to stay under the smallest payment anyone
- * would actually want to make. Polygon `transferWithAuthorization` runs about
- * ¥0.08 of gas, so ¥1 keeps the subsidy near 8% of the payment while leaving
- * per-call pricing intact. The daily budget, not this floor, is the real bound
- * on abuse — this only stops someone draining it with dust.
+ * pay-per-crawl), so the floor has to stay under the smallest payment anyone
+ * would actually want to make. That is a genuine tension, and gas moves, so the
+ * floor is a judgement call rather than a formula.
  *
- * Operators who want true sub-yen payments should self-host and set this to 0.
+ * ¥10 is where it lands. Measured 2026-07-13, a Polygon settlement costs ~¥0.55
+ * of gas (282 gwei, ~65k gas) — a ¥1 floor would have meant sponsoring more than
+ * half the payment's value, which is not a subsidy, it is a giveaway. At ¥10 the
+ * subsidy sits near 5% and per-call pricing still works. Kaia is ~¥0.03, so the
+ * same floor is generous there.
+ *
+ * (An earlier version set ¥1 on the strength of a ¥0.08 gas estimate that was
+ * wrong by 7x. The real number came from reading the chain. Do not re-derive
+ * this from a guess.)
+ *
+ * Operators who want true sub-yen payments should self-host and set this to 0 —
+ * on their own gas, the trade-off is theirs to make.
  */
-export const MIN_SETTLE_JPYC = Number(process.env.MIN_SETTLE_JPYC ?? 1);
+export const MIN_SETTLE_JPYC = Number(process.env.MIN_SETTLE_JPYC ?? 10);
 /** Same floor in wei-JPYC (18 decimals) — what the authorization carries. */
 export const MIN_SETTLE_VALUE = BigInt(MIN_SETTLE_JPYC) * 10n ** 18n;
 

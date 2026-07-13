@@ -54,7 +54,7 @@ async function buildValidBody(
 ): Promise<PaymentRequestBody> {
   const validBefore = overrides.validBefore ?? String(Number(nowSec()) + 3600);
   const validAfter = overrides.validAfter ?? "0";
-  const value = overrides.value ?? "1000000000000000000";
+  const value = overrides.value ?? "10000000000000000000";
   const amount = overrides.amount ?? value;
   const nonce = overrides.nonce ?? NONCE_A;
   const to = (overrides.to ?? RECIPIENT_ADDRESS) as `0x${string}`;
@@ -174,8 +174,8 @@ describe("validatePayment — success cases", () => {
 
   it("ok: overpayment (value > maxAmountRequired)", async () => {
     const body = await buildValidBody({
-      value: "2000000000000000000",
-      amount: "1000000000000000000",
+      value: "20000000000000000000",
+      amount: "10000000000000000000",
     });
     const result = await validatePayment(
       body,
@@ -234,7 +234,7 @@ describe("validatePayment — success cases", () => {
 
   it("ok: Amoy chain (80002) when chain config matches", async () => {
     const validBefore = String(Number(nowSec()) + 3600);
-    const value = "1000000000000000000";
+    const value = "10000000000000000000";
     const nonce = NONCE_A;
     const signature = await signAuthorization(
       testSigner,
@@ -296,7 +296,7 @@ describe("validatePayment — success cases", () => {
   it("invalid_signature: Amoy network header but signed for Polygon", async () => {
     // Sign with Polygon domain but submit as Amoy.
     const validBefore = String(Number(nowSec()) + 3600);
-    const value = "1000000000000000000";
+    const value = "10000000000000000000";
     const nonce = NONCE_A;
     const signature = await signAuthorization(testSigner, {
       from: testSigner.address,
@@ -402,8 +402,8 @@ describe("validatePayment — error cases", () => {
 
   it("invalid_amount: value < amount", async () => {
     const body = await buildValidBody({
-      value: "1000000000000000000",
-      amount: "2000000000000000000",
+      value: "10000000000000000000",
+      amount: "20000000000000000000",
     });
     const result = await validatePayment(
       body,
@@ -671,7 +671,7 @@ describe("validatePayment — error cases", () => {
   });
 
   it("invalid_amount: required amount of 0", async () => {
-    const body = await buildValidBody({ value: "1000000000000000000", amount: "0" });
+    const body = await buildValidBody({ value: "10000000000000000000", amount: "0" });
     const result = await validatePayment(
       body,
       asPublicClient(client),

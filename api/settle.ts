@@ -123,7 +123,7 @@ export default async function handler(req: Request): Promise<Response> {
         errorReason: "network_not_offered",
         transaction: "",
         network: chain.networkId,
-        error: `yen402 does not sponsor settlement on ${chain.name}. Sponsoring ~¥252 of L1 gas to move a micropayment is not a service — settle on Polygon or Kaia, or self-host and fund your own wallet.`,
+        error: `yen402 does not sponsor settlement on ${chain.name}. L1 gas costs orders of magnitude more than the micropayments x402 exists for — settle on Polygon or Kaia, or self-host and fund your own wallet.`,
         code: "network_not_offered",
       },
       400,

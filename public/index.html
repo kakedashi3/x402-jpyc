@@ -160,17 +160,19 @@
         <li><strong>Rate limit</strong> — 4 requests/second, 480/minute, per IP and per payer.</li>
         <li>
           <strong>Sponsored gas</strong> — 5,000 settlements/day on each of
-          Polygon and Kaia, resetting at 00:00 UTC.
-          <code>/supported</code> reports what we can
-          <em>actually</em> pay for right now, read from the wallet — not from a
-          config file.
+          Polygon and Kaia, resetting at 00:00 UTC. But the budget only caps the
+          <em>rate</em>: what actually bounds it is the gas in our wallet.
+          <a href="/supported"><code>/supported</code></a> reports, read live
+          from the chain, how many settlements we can still pay for — and says
+          so plainly when we cannot. We will not let you find out at the moment
+          money moves.
         </li>
         <li><strong>Minimum settlement</strong> — ¥1, so sponsored gas stays a small fraction of the payment.</li>
       </ul>
       <p>
         Ethereum and Avalanche are <strong>not offered here</strong>. The code
-        settles there fine, but sponsoring ¥252 of L1 gas to move a ¥100
-        micropayment is a leak, not a service.
+        settles there fine, but L1 gas costs orders of magnitude more than the
+        micropayments x402 exists for — sponsoring it is a leak, not a service.
       </p>
       <p>
         Need more than that? Don't ask us for a quota —
