@@ -7,24 +7,22 @@ import {
   MIN_SETTLE_JPYC,
   MIN_SETTLE_VALUE,
 } from "../lib/payment-validation.js";
-import {
-  RATE_LIMIT_RPS,
-  RATE_LIMIT_BURST_PER_MIN,
-} from "../lib/ratelimit.js";
-import { budgetStatus } from "../lib/gas-budget.js";
+import { RATE_LIMIT_RPS, RATE_LIMIT_BURST_PER_MIN } from "../lib/ratelimit.js";
+import { budgetForChain, budgetStatus } from "../lib/gas-budget.js";
+import { chainAvailability } from "../lib/gas-balance.js";
 import { corsHeaders, preflight } from "../lib/cors.js";
 
 /**
  * GET /supported — what this facilitator will settle, and on what terms.
  *
- * Two things made this worth adding when the facilitator was opened:
+ * This endpoint reports what the facilitator can ACTUALLY do right now, read
+ * from the chain — not what its config file claims. It used to list five chains
+ * because five were compiled in, while the hot wallet held zero gas on two of
+ * them. A caller would have discovered that at the moment money moved, which is
+ * a worse failure than not being listed at all.
  *
- * 1. A stranger has no other way to find out. With the API key gone, the answer
- *    to "can I point my middleware at you?" has to be fetchable, not emailed.
- * 2. The limits are the price of being open. Rate limits and the sponsored-gas
- *    budget replace the auth wall, so they are published rather than hidden —
- *    a caller that gets a 429 can see exactly which ceiling it hit and what the
- *    escape hatch is (run your own; the image is open source).
+ * So `available` is derived from the facilitator's own gas balance on each
+ * chain, per request. If we cannot pay, we say we cannot pay.
  *
  * Note for conformance suites: x402 CORE §7.3 makes `/supported` OPTIONAL, so
  * its absence must not fail a facilitator. yen402 previously 404'd here.
@@ -40,25 +38,43 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const kinds = SUPPORTED_CHAIN_IDS.map((id) => {
-    const c = resolveChain(id);
-    return {
-      x402Version: 2,
-      scheme: c.scheme,
-      network: c.networkId,
-      asset: c.jpycAddress,
-      extra: { name: c.eip712Name, version: c.eip712Version },
-      // JPYC is 18-decimal on every chain it is deployed to.
-      decimals: 18,
-      mainnet: c.isMainnet,
-    };
-  });
+  const usage = await budgetStatus();
+  const usedByChain = new Map(usage.map((u) => [u.chainId, u.used]));
 
-  const budgets = await budgetStatus();
+  const networks = await Promise.all(
+    SUPPORTED_CHAIN_IDS.map(async (chainId) => {
+      const c = resolveChain(chainId);
+      const budget = budgetForChain(chainId);
+      const gas = await chainAvailability(c, budget > 0);
+      return {
+        x402Version: 2,
+        scheme: c.scheme,
+        network: c.networkId,
+        asset: c.jpycAddress,
+        extra: { name: c.eip712Name, version: c.eip712Version },
+        // JPYC is 18-decimal on every chain it is deployed to.
+        decimals: 18,
+        mainnet: c.isMainnet,
+
+        // Read from the chain, not from config.
+        available: gas.available,
+        ...(gas.available ? {} : { unavailableReason: gas.reason }),
+        sponsoredGas: {
+          settlementsPerDay: budget,
+          usedToday: usedByChain.get(chainId) ?? 0,
+          // How many more we could actually pay for, given the wallet's balance.
+          settlementsAffordable: gas.settlesAffordable,
+        },
+      };
+    }),
+  );
 
   return Response.json(
     {
-      kinds,
+      // Only the networks we can actually settle on. The full list, including
+      // what we do not offer and why, is in `networks`.
+      kinds: networks.filter((n) => n.available),
+      networks,
       // Everything below is the honest cost of having no API key.
       limits: {
         authentication: "none",
@@ -68,15 +84,8 @@ export default async function handler(req: Request): Promise<Response> {
           scopes: ["ip", "payer"],
         },
         sponsoredGas: {
-          // Per chain: one settlement costs ~¥0.03 on Kaia and ~¥252 on
-          // Ethereum, so a single shared cap would be meaningless.
-          perNetwork: budgets.map((b) => ({
-            network: b.network,
-            settlementsPerDay: b.limit,
-            usedToday: b.used,
-          })),
           resetsAt: "00:00 UTC",
-          note: "yen402 pays the on-chain gas for every settlement. These caps bound that subsidy. Ethereum is intentionally small — L1 gas dwarfs a micropayment. Self-host to raise them.",
+          note: "yen402 pays the on-chain gas for every settlement, so the subsidy is capped per chain. Ethereum and Avalanche are not offered: sponsoring ~¥252 of L1 gas to move a ¥100 micropayment is a leak, not a service. Self-host to enable them.",
         },
         minimumSettlement: {
           jpyc: MIN_SETTLE_JPYC,

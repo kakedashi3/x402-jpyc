@@ -36,22 +36,40 @@ import { SUPPORTED_CHAIN_IDS, resolveChain } from "./chain-config.js";
  * already closes with an atomic Redis claim.
  */
 
-/** Sponsored settlements per UTC day, by chain id. Env overrides per chain. */
+/**
+ * Sponsored settlements per UTC day, by chain id. `0` means the public instance
+ * does not offer that chain at all.
+ *
+ * **Ethereum and Avalanche are not offered.** Not because the code cannot settle
+ * there — it can, and a self-hoster should — but because sponsoring gas there is
+ * not a service. One settlement costs ~¥252 on Ethereum mainnet; paying that to
+ * move a ¥100 micropayment is a leak with a nice UI. JPYC's real x402 volume is
+ * on Polygon and Kaia, and those are the chains where a sponsored facilitator
+ * makes economic sense.
+ *
+ * Advertising a chain you will not fund is worse than not listing it: the caller
+ * finds out at the moment money moves. Set `DAILY_SETTLE_BUDGET_1=100` (and fund
+ * the wallet) to offer Ethereum from your own instance.
+ */
 export function budgetForChain(chainId: number): number {
   const override = process.env[`DAILY_SETTLE_BUDGET_${chainId}`];
   if (override !== undefined) return Number(override);
   switch (chainId) {
-    case 1: // Ethereum — ~¥252/settle. 10/day ≈ ¥2,500 worst case.
-      return Number(process.env.DAILY_SETTLE_BUDGET_ETHEREUM ?? 10);
-    case 43114: // Avalanche — ~¥5.25/settle. 100/day ≈ ¥525.
-      return 100;
-    case 137: // Polygon — ~¥0.06/settle. 5,000/day ≈ ¥300.
+    case 137: // Polygon — ~¥0.06/settle. 5,000/day ≈ ¥300 of exposure.
     case 8217: // Kaia — ~¥0.03/settle. 5,000/day ≈ ¥150.
     case 80002: // Amoy testnet — free.
       return 5000;
+    case 1: // Ethereum — ~¥252/settle. Not offered; self-host to enable.
+    case 43114: // Avalanche — ~¥5.25/settle. Not offered; self-host to enable.
+      return 0;
     default:
-      return 100;
+      return 0;
   }
+}
+
+/** Does this instance offer settlement on this chain at all? */
+export function isChainOffered(chainId: number): boolean {
+  return budgetForChain(chainId) > 0;
 }
 
 export type BudgetMode = "normal" | "fail_closed";

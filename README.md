@@ -36,17 +36,19 @@ yen402 sponsors the gas for every settlement, so the subsidy is bounded — and 
 | Sponsored gas | **per chain** — see below | The hard bound on what an anonymous caller can cost us |
 | Minimum settlement | ¥1 | Keeps sponsored gas a small fraction of the payment |
 
-**The gas budget is per chain, because gas is not comparable across chains.** One settlement costs roughly ¥0.03 on Kaia and **¥252 on Ethereum** — a single shared cap would be pocket change on Polygon and a six-figure daily hole on L1.
+**The gas budget is per chain, because gas is not comparable across chains.** One settlement costs roughly ¥0.06 on Polygon and **¥252 on Ethereum**.
 
 | Chain | Sponsored settlements/day | ≈ daily exposure |
 |---|---|---|
 | Polygon (`eip155:137`) | 5,000 | ¥300 |
 | Kaia (`eip155:8217`) | 5,000 | ¥150 |
 | Polygon Amoy (testnet) | 5,000 | — |
-| Avalanche (`eip155:43114`) | 100 | ¥525 |
-| **Ethereum** (`eip155:1`) | **10** | ¥2,500 |
+| Ethereum (`eip155:1`) | **not offered** | — |
+| Avalanche (`eip155:43114`) | **not offered** | — |
 
-Ethereum is deliberately tiny. Sponsoring ¥252 of gas to move a ¥100 micropayment is not a service, it is a leak — settle on Polygon or Kaia.
+**Ethereum and Avalanche are not offered on the public instance.** The code settles there fine — but sponsoring ¥252 of L1 gas to move a ¥100 micropayment is a leak, not a service, and JPYC's real x402 volume is on Polygon and Kaia. `/settle` on those networks returns `network_not_offered` rather than letting you discover it as a failed broadcast. Self-host and set `DAILY_SETTLE_BUDGET_1` to enable them.
+
+`GET /supported` reports what the facilitator can **actually** do right now — `available` is read from the hot wallet's gas balance on each chain, not from this table. If we cannot pay, we say so (`insufficient_facilitator_gas`) instead of failing at the moment money moves.
 
 Need more? Don't ask for a quota — **run your own**. The facilitator is MIT-licensed and deploys to Vercel in minutes (see *Self-hosting*). Set `MIN_SETTLE_JPYC=0` for sub-yen payments and `DAILY_SETTLE_BUDGET_<chainId>` for whatever your own wallet can bear.
 

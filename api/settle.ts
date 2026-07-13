@@ -20,7 +20,12 @@ import {
 } from "../lib/payment-validation.js";
 import { notifyTagamie } from "../lib/tagamie-webhook.js";
 import { checkRateLimit, callerIp } from "../lib/ratelimit.js";
-import { reserveSettlement, releaseSettlement } from "../lib/gas-budget.js";
+import {
+  reserveSettlement,
+  releaseSettlement,
+  isChainOffered,
+} from "../lib/gas-budget.js";
+import { chainAvailability } from "../lib/gas-balance.js";
 import { corsHeaders, preflight } from "../lib/cors.js";
 import { networkFromBody } from "../lib/request-network.js";
 
@@ -109,6 +114,22 @@ export default async function handler(req: Request): Promise<Response> {
     throw err;
   }
 
+  // This instance may simply not offer this chain. Say so plainly — do not let
+  // the caller discover it as a failed broadcast.
+  if (!isChainOffered(chain.chainId)) {
+    return json(
+      {
+        success: false,
+        errorReason: "network_not_offered",
+        transaction: "",
+        network: chain.networkId,
+        error: `yen402 does not sponsor settlement on ${chain.name}. Sponsoring ~¥252 of L1 gas to move a micropayment is not a service — settle on Polygon or Kaia, or self-host and fund your own wallet.`,
+        code: "network_not_offered",
+      },
+      400,
+    );
+  }
+
   if (!_facilitatorAccount) {
     return json({ error: "Service not configured (facilitator key)" }, 503);
   }
@@ -187,6 +208,25 @@ export default async function handler(req: Request): Promise<Response> {
   // is capped at DAILY_SETTLE_BUDGET settlements of gas, and that number is
   // published in /supported and the README rather than hidden behind an auth
   // wall. Fails closed — we never broadcast gas we cannot account for.
+  // Can we actually pay? A budget is permission to spend; this is whether the
+  // wallet has anything to spend. Checked before reserving, so a dry wallet does
+  // not silently burn the day's allowance.
+  const gas = await chainAvailability(chain, true);
+  if (!gas.available) {
+    return json(
+      {
+        success: false,
+        errorReason: "insufficient_facilitator_gas",
+        payer: fromAddr,
+        transaction: "",
+        network: chain.networkId,
+        error: `The facilitator wallet cannot currently pay gas on ${chain.name}. This is our problem, not yours — try another network, or self-host. Live status: /supported`,
+        code: "insufficient_facilitator_gas",
+      },
+      503,
+    );
+  }
+
   const budget = await reserveSettlement(chain.chainId);
   if (!budget.ok) {
     const exhausted = budget.mode === "normal";
