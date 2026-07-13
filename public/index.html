@@ -145,8 +145,6 @@
         <table>
           <tr><th>Chain</th><th>Network</th></tr>
           <tr><td>Polygon</td><td><code>eip155:137</code></td></tr>
-          <tr><td>Ethereum</td><td><code>eip155:1</code></td></tr>
-          <tr><td>Avalanche C-Chain</td><td><code>eip155:43114</code></td></tr>
           <tr><td>Kaia</td><td><code>eip155:8217</code></td></tr>
           <tr><td>Polygon Amoy (testnet)</td><td><code>eip155:80002</code></td></tr>
         </table>
@@ -161,15 +159,19 @@
       <ul>
         <li><strong>Rate limit</strong> — 4 requests/second, 480/minute, per IP and per payer.</li>
         <li>
-          <strong>Sponsored gas</strong> — per chain, resetting at 00:00 UTC.
-          Gas is not comparable across chains: one settlement is about ¥0.06 on
-          Polygon and <strong>¥252 on Ethereum</strong>.
-          <br />Polygon &amp; Kaia <strong>5,000/day</strong> ·
-          Avalanche <strong>100/day</strong> ·
-          Ethereum <strong>10/day</strong>.
+          <strong>Sponsored gas</strong> — 5,000 settlements/day on each of
+          Polygon and Kaia, resetting at 00:00 UTC.
+          <code>/supported</code> reports what we can
+          <em>actually</em> pay for right now, read from the wallet — not from a
+          config file.
         </li>
         <li><strong>Minimum settlement</strong> — ¥1, so sponsored gas stays a small fraction of the payment.</li>
       </ul>
+      <p>
+        Ethereum and Avalanche are <strong>not offered here</strong>. The code
+        settles there fine, but sponsoring ¥252 of L1 gas to move a ¥100
+        micropayment is a leak, not a service.
+      </p>
       <p>
         Need more than that? Don't ask us for a quota —
         <a href="https://github.com/kakedashi3/x402-jpyc">run your own</a>. The

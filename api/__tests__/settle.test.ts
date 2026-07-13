@@ -39,6 +39,12 @@ vi.mock("../../lib/replay.js", () => ({
   claimNonce: mockClaimNonce,
 }));
 
+const mockChainAvailability = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/gas-balance.js", () => ({
+  chainAvailability: mockChainAvailability,
+  SETTLE_GAS_LIMIT: 120000n,
+}));
+
 // Mock viem modules before importing handler
 vi.mock("viem", async () => {
   const actual = await vi.importActual<typeof import("viem")>("viem");
@@ -139,6 +145,12 @@ describe("POST /api/settle (EIP-3009)", () => {
     vi.stubEnv("API_KEY", "test-secret");
     mockClaimNonce.mockResolvedValue({ ok: true, mode: "normal" });
     mockVerifyTypedData.mockResolvedValue(true);
+    // Default: the facilitator wallet can pay.
+    mockChainAvailability.mockResolvedValue({
+      available: true,
+      settlesAffordable: 1000,
+      native: "1.0",
+    });
   });
 
   it("returns 405 for non-POST methods", async () => {
@@ -372,27 +384,43 @@ describe("POST /api/settle (EIP-3009)", () => {
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
     });
 
-    // The budget MUST be per chain. One settlement costs ~¥0.06 on Polygon and
-    // ~¥252 on Ethereum, so a shared 5,000/day cap would be ¥300 of exposure on
-    // Polygon and ¥1,260,000 on Ethereum — a stranger could drain the L1 wallet.
-    it("budgets each chain separately — Ethereum's cap is not Polygon's", async () => {
-      const day = new Date().toISOString().slice(0, 10);
-      // Spend Ethereum's entire daily allowance (10), leave Polygon untouched.
-      fakeRedis.store.set(`gasbudget:1:${day}`, 10);
-
+    // Ethereum is not offered on the public instance: ~¥252 of sponsored gas to
+    // move a ¥100 micropayment is a leak, not a service. Say so up front rather
+    // than letting the caller find out when the broadcast fails.
+    it("refuses a chain it does not offer, before touching the wallet", async () => {
       const ethBody = structuredClone(validBody);
       ethBody.paymentPayload.network = "eip155:1";
       ethBody.paymentRequirements.network = "eip155:1";
 
-      const eth = await handler(makeRequest({ body: ethBody }));
-      expect(eth.status).toBe(429);
-      expect((await eth.json()).errorReason).toBe("budget_exhausted");
+      const res = await handler(makeRequest({ body: ethBody }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).errorReason).toBe("network_not_offered");
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
 
-      // Polygon still settles — exhausting L1 must not take the cheap chains
-      // down with it.
+      // The offered chains are unaffected.
       const poly = await handler(makeRequest({ body: validBody }));
       expect(poly.status).toBe(200);
+    });
+
+    // Advertising a chain we cannot fund is worse than not listing it — the
+    // caller finds out at the moment money moves. Fail loudly and honestly.
+    it("says so when the facilitator wallet cannot pay the gas", async () => {
+      mockChainAvailability.mockResolvedValue({
+        available: false,
+        reason: "insufficient_facilitator_gas",
+        settlesAffordable: 0,
+        native: "0",
+      });
+
+      const res = await handler(makeRequest({ body: validBody }));
+      expect(res.status).toBe(503);
+      const data: any = await res.json();
+      expect(data.errorReason).toBe("insufficient_facilitator_gas");
+      expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+
+      // A dry wallet must not silently eat the day's budget either.
+      const day = new Date().toISOString().slice(0, 10);
+      expect(fakeRedis.store.get(`gasbudget:137:${day}`) ?? 0).toBe(0);
     });
 
     it("rate-limits a caller hammering the endpoint from one IP", async () => {
