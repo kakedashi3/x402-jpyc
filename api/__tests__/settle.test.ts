@@ -1,37 +1,38 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
-const mockSingle = vi.hoisted(() => vi.fn());
-const mockRecipients = vi.hoisted(() =>
-  vi.fn<() => Promise<{ data: Array<{ recipient_address: string }> | null }>>(),
-);
-const mockClaimNonce = vi.hoisted(() => vi.fn());
 const mockVerifyTypedData = vi.hoisted(() => vi.fn());
+const mockClaimNonce = vi.hoisted(() => vi.fn());
 
-vi.mock("../../lib/supabase.js", () => ({
-  supabase: {
-    from: (table: string) => {
-      if (table === "api_key_recipients") {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => mockRecipients(),
-            }),
-          }),
-        };
-      }
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              single: mockSingle,
-            }),
-          }),
-        }),
-        insert: () => Promise.resolve({ error: null }),
-        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
-      };
+// No api_keys table to mock any more — the facilitator is open. We fake the
+// Redis store instead, so the rate limiter and the daily sponsored-gas budget
+// that REPLACED the API key are exercised for real.
+const fakeRedis = vi.hoisted(() => {
+  const store = new Map<string, number | string>();
+  return {
+    store,
+    incr: async (k: string) => {
+      const n = Number(store.get(k) ?? 0) + 1;
+      store.set(k, n);
+      return n;
     },
-  },
+    decr: async (k: string) => {
+      const n = Number(store.get(k) ?? 0) - 1;
+      store.set(k, n);
+      return n;
+    },
+    expire: async () => 1,
+    get: async (k: string) => store.get(k) ?? null,
+    set: async (k: string, v: string, o?: { nx?: boolean }) => {
+      if (o?.nx && store.has(k)) return null;
+      store.set(k, v);
+      return "OK";
+    },
+  };
+});
+
+vi.mock("../../lib/redis.js", () => ({
+  getRedis: () => fakeRedis,
+  resetRedisForTests: () => {},
 }));
 
 vi.mock("../../lib/replay.js", () => ({
@@ -113,13 +114,9 @@ const validBody = {
 
 function makeRequest(options: {
   method?: string;
-  apiKey?: string;
   body?: unknown;
 }): Request {
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (options.apiKey) {
-    headers.set("x-api-key", options.apiKey);
-  }
   return new Request("https://example.com/api/settle", {
     method: options.method ?? "POST",
     headers,
@@ -136,18 +133,6 @@ describe("POST /api/settle (EIP-3009)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("API_KEY", "test-secret");
-    mockSingle.mockResolvedValue({
-      data: {
-        id: "key-id",
-        user_id: "user-id",
-        recipient_address: "0x2222222222222222222222222222222222222222",
-        chain_id: 137,
-      },
-      error: null,
-    });
-    // Default: no recipients table rows → handler falls back to
-    // api_keys.recipient_address as a single-element allowlist.
-    mockRecipients.mockResolvedValue({ data: null });
     mockClaimNonce.mockResolvedValue({ ok: true, mode: "normal" });
     mockVerifyTypedData.mockResolvedValue(true);
   });
@@ -159,17 +144,19 @@ describe("POST /api/settle (EIP-3009)", () => {
     expect(res.status).toBe(405);
   });
 
-  it("returns 401 when X-API-Key header is missing", async () => {
-    const res = await handler(makeRequest({ method: "POST", body: {} }));
-    expect(res.status).toBe(401);
-  });
-
-  it("returns 401 when X-API-Key header is wrong", async () => {
-    mockSingle.mockResolvedValue({ data: null, error: "Not found" });
-    const res = await handler(
-      makeRequest({ method: "POST", apiKey: "wrong-key", body: {} }),
+  // The facilitator is open. A caller with no credentials whatsoever must get a
+  // real answer about their payment, not a 401 — that is the entire point of
+  // the redesign, and every other facilitator in the x402 directory behaves
+  // this way (PayAI, Dexter, Mogami, HPP all require no API key).
+  it("does not require an API key — an unauthenticated settle is processed", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockWalletClient.writeContract.mockResolvedValue(
+      "0xdeadbeef" as `0x${string}`,
     );
-    expect(res.status).toBe(401);
+    const res = await handler(makeRequest({ method: "POST", body: validBody }));
+    expect(res.status).toBe(200);
+    const data: any = await res.json();
+    expect(data.success).toBe(true);
   });
 
   it("returns 400 for invalid JSON", async () => {
@@ -177,7 +164,6 @@ describe("POST /api/settle (EIP-3009)", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": "test-secret",
       },
       body: "not valid json{{{",
     });
@@ -189,9 +175,7 @@ describe("POST /api/settle (EIP-3009)", () => {
 
   it("returns 400 when authorization is missing", async () => {
     const res = await handler(
-      makeRequest({
-        apiKey: "test-secret",
-        body: {
+      makeRequest({ body: {
           paymentPayload: { payload: {} },
           paymentRequirements: {},
         },
@@ -203,7 +187,7 @@ describe("POST /api/settle (EIP-3009)", () => {
   it("returns 400 when nonce is already used", async () => {
     mockPublicClient.readContract.mockResolvedValue(true); // nonce used
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -214,7 +198,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     const expiredBody = structuredClone(validBody);
     expiredBody.paymentPayload.payload.authorization.validBefore = "1000"; // way in the past
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: expiredBody }),
+      makeRequest({ body: expiredBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -226,7 +210,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     mismatchBody.paymentPayload.payload.authorization.to =
       "0x3333333333333333333333333333333333333333";
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: mismatchBody }),
+      makeRequest({ body: mismatchBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -240,7 +224,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     );
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("X-Replay-Protection")).toBe("normal");
@@ -262,7 +246,7 @@ describe("POST /api/settle (EIP-3009)", () => {
 
     const bodyWithTopVersion = { ...validBody, x402Version: 2 };
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: bodyWithTopVersion }),
+      makeRequest({ body: bodyWithTopVersion }),
     );
     expect(res.status).toBe(200);
   });
@@ -272,7 +256,7 @@ describe("POST /api/settle (EIP-3009)", () => {
 
     const bodyWithMismatch = { ...validBody, x402Version: 1 };
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: bodyWithMismatch }),
+      makeRequest({ body: bodyWithMismatch }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -289,7 +273,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     });
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(503);
     const data: any = await res.json();
@@ -308,7 +292,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     );
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("X-Replay-Protection")).toBe("degraded");
@@ -321,7 +305,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     );
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(500);
     const data: any = await res.json();
@@ -333,105 +317,73 @@ describe("POST /api/settle (EIP-3009)", () => {
     expect(data.network).toBe("eip155:137");
   });
 
-  describe("allowlist (api_key_recipients)", () => {
-    const RECIPIENT_A = "0xAAaaAAAAAAaaaaaaaAaaaAaaAaAaAAaAAAaaAaAa";
-    const RECIPIENT_B = "0xBbbbbbbBBBbbBbBBbbbbbbBbBbbbbBBbbBBBbBBB";
-    const PRIMARY = "0x9999999999999999999999999999999999999999";
+  // The allowlist is gone. These are the controls that replaced it.
+  describe("open facilitator — what replaced the API key", () => {
+    const STRANGER = "0xAAaaAAAAAAaaaaaaaAaaaAaaAaAaAAaAAAaaAaAa";
+    const OTHER = "0xBbbbbbbBBBbbBbBBbbbbbbBbBbbbbBBbbBBBbBBB";
 
     beforeEach(() => {
-      mockSingle.mockResolvedValue({
-        data: {
-          id: "key-id",
-          user_id: "user-id",
-          recipient_address: PRIMARY,
-          chain_id: 137,
-        },
-        error: null,
-      });
       mockPublicClient.readContract.mockResolvedValue(false); // nonce unused
       mockWalletClient.writeContract.mockResolvedValue(
         "0xdeadbeef" as `0x${string}`,
       );
     });
 
-    it("settles to the matched recipient, not the api_keys primary", async () => {
-      mockRecipients.mockResolvedValue({
-        data: [
-          { recipient_address: RECIPIENT_A },
-          { recipient_address: RECIPIENT_B },
-        ],
-      });
-
+    it("settles for a payTo nobody registered — any seller can use it now", async () => {
       const body = structuredClone(validBody);
-      body.paymentPayload.payload.authorization.to = RECIPIENT_A;
-      body.paymentRequirements.payTo = RECIPIENT_A;
+      body.paymentPayload.payload.authorization.to = STRANGER;
+      body.paymentRequirements.payTo = STRANGER;
 
-      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      const res = await handler(makeRequest({ body }));
       expect(res.status).toBe(200);
 
-      // The on-chain `to` arg must be the matched recipient (A), not the
-      // api_keys primary. This is the whole point of the allowlist: each
-      // settlement goes to the specific seller the buyer paid, not a
-      // single house wallet.
-      const writeArgs = mockWalletClient.writeContract.mock.calls[0]?.[0];
-      expect(writeArgs).toBeDefined();
-      // args order: [from, to, value, validAfter, validBefore, nonce, v, r, s]
-      const toArg = writeArgs.args[1] as string;
-      expect(toArg.toLowerCase()).toBe(RECIPIENT_A.toLowerCase());
-      expect(toArg.toLowerCase()).not.toBe(PRIMARY.toLowerCase());
-    });
-
-    it("settles to recipient B when the buyer paid recipient B", async () => {
-      mockRecipients.mockResolvedValue({
-        data: [
-          { recipient_address: RECIPIENT_A },
-          { recipient_address: RECIPIENT_B },
-        ],
-      });
-
-      const body = structuredClone(validBody);
-      body.paymentPayload.payload.authorization.to = RECIPIENT_B;
-      body.paymentRequirements.payTo = RECIPIENT_B;
-
-      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
-      expect(res.status).toBe(200);
-
+      // Funds go to the address the buyer signed, which is the only address
+      // the facilitator is even able to send to.
       const writeArgs = mockWalletClient.writeContract.mock.calls[0]?.[0];
       const toArg = writeArgs.args[1] as string;
-      expect(toArg.toLowerCase()).toBe(RECIPIENT_B.toLowerCase());
+      expect(toArg.toLowerCase()).toBe(STRANGER.toLowerCase());
     });
 
-    it("rejects settle when authorization.to is not in the allowlist", async () => {
-      mockRecipients.mockResolvedValue({
-        data: [{ recipient_address: RECIPIENT_A }],
-      });
-
+    it("rejects when the signed `to` disagrees with the declared payTo", async () => {
       const body = structuredClone(validBody);
-      body.paymentPayload.payload.authorization.to = RECIPIENT_B;
-      body.paymentRequirements.payTo = RECIPIENT_B;
+      body.paymentPayload.payload.authorization.to = STRANGER;
+      body.paymentRequirements.payTo = OTHER;
 
-      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
-      expect(res.status).toBe(400);
-      const data: any = await res.json();
-      expect(data.errorReason).toBe("invalid_pay_to");
-      expect(data.error).toContain("allowlist");
-      // Must not have called writeContract on a rejected settle.
-      expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
-    });
-
-    it("rejects settle to the primary when allowlist is populated and excludes it", async () => {
-      mockRecipients.mockResolvedValue({
-        data: [{ recipient_address: RECIPIENT_A }],
-      });
-
-      // validBody pays to 0x2222... which is neither A nor PRIMARY.
-      const res = await handler(
-        makeRequest({ apiKey: "test-secret", body: validBody }),
-      );
+      const res = await handler(makeRequest({ body }));
       expect(res.status).toBe(400);
       const data: any = await res.json();
       expect(data.errorReason).toBe("invalid_pay_to");
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+    });
+
+    it("refuses to broadcast once the daily sponsored-gas budget is spent", async () => {
+      const today = `gasbudget:${new Date().toISOString().slice(0, 10)}`;
+      fakeRedis.store.set(today, 1000); // DAILY_SETTLE_BUDGET default
+
+      const res = await handler(makeRequest({ body: validBody }));
+      expect(res.status).toBe(429);
+      const data: any = await res.json();
+      expect(data.errorReason).toBe("budget_exhausted");
+      // The bound has to actually bind: no gas may be spent past it.
+      expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+    });
+
+    it("rate-limits a caller hammering the endpoint from one IP", async () => {
+      const hammer = () => {
+        const req = new Request("https://example.com/api/settle", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-forwarded-for": "203.0.113.9",
+          },
+          body: JSON.stringify(validBody),
+        });
+        return handler(req);
+      };
+      // RATE_LIMIT_RPS defaults to 4; the 5th call in the same second trips it.
+      const codes: number[] = [];
+      for (let i = 0; i < 6; i++) codes.push((await hammer()).status);
+      expect(codes).toContain(429);
     });
   });
 });

@@ -2,12 +2,10 @@ export const config = {
   runtime: "edge",
 };
 
-import { getAddress, type Address } from "viem";
-import { supabase } from "../lib/supabase";
 import {
   getFacilitatorAccount,
   getPublicClient,
-  resolveChain,
+  resolveChainByNetworkId,
   ChainNotSupportedError,
   type ChainConfig,
 } from "../lib/chain-config.js";
@@ -16,95 +14,49 @@ import {
   validatePayment,
   type PaymentRequestBody,
 } from "../lib/payment-validation.js";
-import { logUsage } from "../lib/usage-log.js";
+import { checkRateLimit, callerIp } from "../lib/ratelimit.js";
+import { corsHeaders, preflight } from "../lib/cors.js";
+import { networkFromBody } from "../lib/request-network.js";
 
 const _facilitatorAccount = getFacilitatorAccount();
 
 function json(data: unknown, status = 200): Response {
-  return Response.json(data, { status });
+  return Response.json(data, { status, headers: corsHeaders() });
 }
 
-async function hashApiKey(apiKey: string): Promise<string> {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(apiKey),
-  );
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
+/**
+ * POST /verify — open, unauthenticated.
+ *
+ * There is no API key. The key yen402 used to require never protected funds:
+ * `authorization.to` sits inside the buyer's EIP-3009 signature, so the
+ * facilitator cannot redirect a payment. It only protected sponsored gas, and
+ * `/verify` spends none — it is a read-only simulation. Abuse of the endpoint
+ * itself is bounded by the rate limiter; `/settle` additionally holds the
+ * daily gas budget.
+ *
+ * The chain now comes from the payment's own `network` (e.g. `eip155:137`)
+ * rather than from a chain id bound to an API key row, which is what let a
+ * single seller only ever use one chain.
+ */
 export default async function handler(req: Request): Promise<Response> {
+  const pre = preflight(req);
+  if (pre) return pre;
+
   if (req.method !== "POST") {
     return json({ error: "Method not allowed" }, 405);
   }
 
-  const providedKey = req.headers.get("x-api-key");
-  if (!providedKey) {
-    return json({ error: "Unauthorized" }, 401);
-  }
-
-  const keyHash = await hashApiKey(providedKey);
-  const { data: keyRow, error: keyError } = await supabase
-    .from("api_keys")
-    .select("id, user_id, recipient_address, chain_id")
-    .eq("api_key_hash", keyHash)
-    .eq("is_active", true)
-    .single();
-
-  if (keyError || !keyRow) {
-    return json({ error: "Unauthorized" }, 401);
-  }
-
-  // Resolve the allowlist of payTo addresses for this api_key. Prefer the
-  // api_key_recipients table; fall back to api_keys.recipient_address for
-  // rows that pre-date the backfill or somehow skipped it.
-  const { data: recipientRows } = await supabase
-    .from("api_key_recipients")
-    .select("recipient_address")
-    .eq("api_key_id", keyRow.id)
-    .eq("is_active", true);
-
-  const allowlist: Address[] =
-    recipientRows && recipientRows.length > 0
-      ? recipientRows.map((r: { recipient_address: string }) =>
-          getAddress(r.recipient_address),
-        )
-      : [getAddress(keyRow.recipient_address)];
-
-  const requestedChainId = (keyRow.chain_id as number | null) ?? 137;
-
-  let chain: ChainConfig;
-  try {
-    chain = resolveChain(requestedChainId);
-  } catch (err) {
-    if (err instanceof ChainNotSupportedError) {
-      return json(
-        {
-          isValid: false,
-          invalidReason: "invalid_chain_id",
-          error: err.message,
-          code: "invalid_chain_id",
-        },
-        400,
-      );
-    }
-    throw err;
-  }
-
-  if (!_facilitatorAccount) {
+  const rl = await checkRateLimit({ ip: callerIp(req) });
+  if (!rl.ok) {
     return json(
-      { error: "Service not configured (facilitator key)" },
-      503,
+      {
+        isValid: false,
+        invalidReason: "rate_limited",
+        error: `Rate limit exceeded (${rl.limit} per ${rl.window} per ${rl.scope}). Run your own facilitator for unlimited use — the image is open source.`,
+        code: "rate_limited",
+      },
+      429,
     );
-  }
-
-  let publicClient;
-  try {
-    publicClient = getPublicClient(chain);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return json({ error: `Service not configured: ${message}` }, 503);
   }
 
   let body: PaymentRequestBody;
@@ -122,12 +74,37 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const result = await validatePayment(
-    body,
-    allowlist,
-    publicClient,
-    chain,
-  );
+  let chain: ChainConfig;
+  try {
+    chain = resolveChainByNetworkId(networkFromBody(body));
+  } catch (err) {
+    if (err instanceof ChainNotSupportedError) {
+      return json(
+        {
+          isValid: false,
+          invalidReason: "invalid_network",
+          error: `Unsupported network. yen402 settles JPYC on Ethereum, Polygon, Polygon Amoy, Avalanche and Kaia.`,
+          code: "invalid_network",
+        },
+        400,
+      );
+    }
+    throw err;
+  }
+
+  if (!_facilitatorAccount) {
+    return json({ error: "Service not configured (facilitator key)" }, 503);
+  }
+
+  let publicClient;
+  try {
+    publicClient = getPublicClient(chain);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return json({ error: `Service not configured: ${message}` }, 503);
+  }
+
+  const result = await validatePayment(body, publicClient, chain);
   if (!result.ok) {
     return json(
       {
@@ -158,8 +135,6 @@ export default async function handler(req: Request): Promise<Response> {
       sim.status,
     );
   }
-
-  logUsage({ apiKeyId: keyRow.id, event: "verify_success" });
 
   return json({ isValid: true, payer: result.payment.fromAddr });
 }

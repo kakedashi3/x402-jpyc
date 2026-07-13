@@ -1,4 +1,4 @@
-import { Redis } from "@upstash/redis";
+import { getRedis } from "./redis.js";
 
 /**
  * Upstash Redis-based replay protection for EIP-3009 authorizations.
@@ -12,18 +12,11 @@ import { Redis } from "@upstash/redis";
  * by setting REPLAY_FAIL_OPEN=true.
  *
  * On transaction revert the key is NOT released (fail-safe).
+ *
+ * With the facilitator open (no API key), this atomic claim is also what makes
+ * pure gas-burn griefing impractical: it closes the nonce race between the
+ * on-chain pre-check and the broadcast.
  */
-
-let _redis: Redis | null = null;
-
-function getRedis(): Redis | null {
-  if (_redis) return _redis;
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  _redis = new Redis({ url, token });
-  return _redis;
-}
 
 function failOpenEnabled(): boolean {
   return process.env.REPLAY_FAIL_OPEN === "true";
