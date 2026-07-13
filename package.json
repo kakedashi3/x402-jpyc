@@ -25,7 +25,7 @@
     "@vitest/coverage-v8": "^4.1.9",
     "tsx": "^4.22.5",
     "typescript": "^5.6.0",
-    "vercel": "^54.20.0",
+    "vercel": "^55.0.0",
     "vitest": "^4.1.9"
   },
   "overrides": {
