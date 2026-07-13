@@ -3,7 +3,7 @@
   "rewrites": [
     { "source": "/verify", "destination": "/api/verify" },
     { "source": "/settle", "destination": "/api/settle" },
-    { "source": "/health", "destination": "/api/health" },
-    { "source": "/payment-info", "destination": "/api/payment-info" }
+    { "source": "/supported", "destination": "/api/supported" },
+    { "source": "/health", "destination": "/api/health" }
   ]
 }

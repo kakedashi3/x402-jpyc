@@ -3,20 +3,48 @@
 
 # x402-jpyc
 
-x402 facilitator for JPYC (JPY Coin) on Polygon. Lets HTTP APIs charge in JPYC and lets clients pay with an EIP-3009 signed authorization.
+A **free, open x402 facilitator for JPYC** (JPY Coin — the yen stablecoin). Lets HTTP APIs charge in yen and lets clients pay with an EIP-3009 signed authorization, with no gas of their own.
+
+**No API key. No account. No fees.** Point your middleware at it:
+
+```bash
+FACILITATOR_URL=https://yen402.com
+```
+
+That is the whole setup. There is nothing to register — the recipient of a payment is the address the buyer *signed*, so the facilitator has no need to know who you are, and no ability to send your money anywhere else.
 
 [日本語版 README](./README.ja.md)
 
 ## Endpoints
 
-Hosted at `https://yen402.com`. Both the short form and the `/api/*` form work (Vercel rewrites).
+Hosted at `https://yen402.com`. Both the short form and the `/api/*` form work (Vercel rewrites). CORS is enabled, so browser clients can call it directly.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/verify` | Validate an EIP-3009 payment authorization |
-| `POST` | `/settle` | Validate, then submit `transferWithAuthorization` on-chain |
+| `POST` | `/verify` | Validate an EIP-3009 payment authorization (read-only) |
+| `POST` | `/settle` | Validate, then submit `transferWithAuthorization` on-chain — yen402 pays the gas |
+| `GET`  | `/supported` | Chains, asset, and the live limits below, as JSON |
 | `GET`  | `/health` | Health check |
-| `GET`  | `/payment-info` | Return the recipient address bound to the API key |
+
+## Limits
+
+yen402 sponsors the gas for every settlement, so the subsidy is bounded — and the bounds are published here rather than hidden behind a signup. Live values: [`/supported`](https://yen402.com/supported).
+
+| Limit | Default | Why |
+|---|---|---|
+| Rate limit | 4 req/s, 480/min (per IP and per payer) | Stops one caller monopolising a shared service |
+| Sponsored gas | 1,000 settlements/day, resets 00:00 UTC | The hard bound on what an anonymous caller can cost us |
+| Minimum settlement | ¥1 | Keeps sponsored gas a small fraction of the payment |
+
+Need more? Don't ask for a quota — **run your own**. The facilitator is MIT-licensed and deploys to Vercel in minutes (see *Self-hosting*). Set `MIN_SETTLE_JPYC=0` if you want true sub-yen payments.
+
+## Why there is no API key
+
+The key this facilitator used to require never protected funds. `authorization.to` sits inside the buyer's EIP-3009 signature, so a facilitator **cannot** redirect a payment — the worst it can do is refuse to broadcast one. The key only protected the facilitator's own sponsored gas, and it did so at the cost of making the service unusable by anyone who had not registered first.
+
+Gas is bounded directly instead: a rate limit, a published daily budget, and a dust floor. That is also how every other facilitator in the [x402 directory](https://github.com/x402-foundation/x402/blob/main/docs/dev-tools/facilitators.md) does it (PayAI, Dexter, Mogami and HPP all require no API key).
+
+The one check that makes an open facilitator safe is this: the recipient the buyer **signed** (`authorization.to`) must equal the recipient the seller **declared** (`paymentRequirements.payTo`). A mismatch is rejected before anything is broadcast.
 
 ## Quick Start — Server
 
@@ -177,7 +205,6 @@ Validates a payment authorization. Does not broadcast.
 ```bash
 curl -X POST https://yen402.com/verify \
   -H "Content-Type: application/json" \
-  -H "x-api-key: YOUR_API_KEY" \
   -d '{
     "paymentPayload": {
       "x402Version": 2,
@@ -226,23 +253,6 @@ Response:
 { "success": true, "txHash": "0x...", "network": "eip155:137" }
 ```
 
-### `GET /payment-info`
-
-Returns the recipient address registered for the API key.
-
-```bash
-curl https://yen402.com/payment-info \
-  -H "x-api-key: YOUR_API_KEY"
-```
-
-```json
-{
-  "recipientAddress": "0xYOUR_RECIPIENT_ADDRESS",
-  "network": "eip155:137",
-  "token": "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29"
-}
-```
-
 ### `GET /health`
 
 ```json
@@ -262,32 +272,36 @@ curl https://yen402.com/payment-info \
 | `FACILITATOR_PRIVATE_KEY` | Yes | Wallet private key used to broadcast `transferWithAuthorization`. Must hold native gas on every chain you intend to settle on (MATIC / ETH / AVAX / KAIA). |
 | `POLYGON_RPC_URL` | Yes | Polygon mainnet RPC endpoint (Alchemy / QuickNode recommended) |
 | `AMOY_RPC_URL` | Optional | Polygon Amoy testnet RPC endpoint |
-| `ETHEREUM_RPC_URL` | Optional | Ethereum mainnet RPC endpoint. Required only if any API key is bound to `chain_id = 1`. |
-| `AVALANCHE_RPC_URL` | Optional | Avalanche C-Chain RPC endpoint. Required only if any API key is bound to `chain_id = 43114`. |
-| `KAIA_RPC_URL` | Optional | Kaia mainnet RPC endpoint (`https://public-en.node.kaia.io` works). Required only if any API key is bound to `chain_id = 8217`. |
-| `SUPABASE_URL` | Yes | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server-side only) |
-| `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST URL for nonce replay protection |
+| `ETHEREUM_RPC_URL` | Optional | Ethereum mainnet RPC endpoint. Needed only to settle on `eip155:1`. |
+| `AVALANCHE_RPC_URL` | Optional | Avalanche C-Chain RPC endpoint. Needed only to settle on `eip155:43114`. |
+| `KAIA_RPC_URL` | Optional | Kaia mainnet RPC endpoint (`https://public-en.node.kaia.io` works). Needed only to settle on `eip155:8217`. |
+| `UPSTASH_REDIS_REST_URL` | Yes | Upstash Redis REST URL — nonce replay protection, rate limiting, gas budget |
 | `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis REST token |
+| `RATE_LIMIT_RPS` | Optional | Requests/second per subject (default `4`) |
+| `RATE_LIMIT_BURST_PER_MIN` | Optional | Requests/minute per subject (default `480`) |
+| `DAILY_SETTLE_BUDGET` | Optional | Sponsored settlements per UTC day (default `1000`) |
+| `MIN_SETTLE_JPYC` | Optional | Dust floor in whole yen (default `1`; set `0` to allow sub-yen payments) |
 
-## API Key Management
+No database. The settlement path touches the chain and Redis, nothing else.
 
-API keys live in a Supabase `api_keys` table:
+## Self-hosting
 
-| Column | Description |
-|---|---|
-| `api_key_hash` | SHA-256 hash of the raw key (the raw key is never stored) |
-| `api_key_prefix` | First few characters of the key for display |
-| `recipient_address` | On-chain address that receives JPYC payments for this key |
-| `is_active` | Toggle to revoke without deleting |
+The public instance is rate-limited and gas-budgeted because it is a shared, sponsored service. Your own instance is neither.
 
-The `x-api-key` header is hashed on each request and matched against `api_key_hash`. The destination of every transfer is the `recipient_address` registered for that key — the caller cannot override it.
+```bash
+git clone https://github.com/kakedashi3/x402-jpyc && cd x402-jpyc
+npm install
+# set FACILITATOR_PRIVATE_KEY, POLYGON_RPC_URL, UPSTASH_REDIS_REST_URL/TOKEN
+npx vercel --prod
+```
+
+Your facilitator wallet pays the gas for the settlements it broadcasts, so fund it with native gas on each chain you settle.
 
 ## Notes
 
 - JPYC (JPY Coin) settlement uses EIP-3009 `transferWithAuthorization(...)`.
 - The facilitator is the relayer; the payer signs an EIP-712 typed authorization off-chain.
-- EIP-712 domain: `name: "JPY Coin"`, `version: "1"`. `chainId` is the chain the API key is bound to (`1`, `137`, `80002`, `43114`, or `8217`).
+- EIP-712 domain: `name: "JPY Coin"`, `version: "1"`. `chainId` comes from the payment's own `network` (`eip155:1`, `137`, `80002`, `43114`, `8217`) — not from any server-side binding.
 - Supported chains: Ethereum (`1`), Polygon (`137`), Polygon Amoy (`80002`, testnet), Avalanche (`43114`), Kaia (`8217`). JPYC shares the proxy address `0xe7c3d8c9a439fede00d2600032d5db0be71c3c29` and 18 decimals on every chain. See `spec.md` for the wire-level table.
 - Nonce replay protection: atomic `SET NX + TTL` in Upstash Redis, scoped by `chain:contract:from:nonce`. The TTL is derived from `validBefore`. On Redis unavailability the service fails open and the on-chain `authorizationState` check remains the final guard.
 - `/settle` returns `txHash` immediately after broadcast.
