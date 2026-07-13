@@ -1,36 +1,37 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 
-const mockSingle = vi.hoisted(() => vi.fn());
-const mockRecipients = vi.hoisted(() =>
-  vi.fn<() => Promise<{ data: Array<{ recipient_address: string }> | null }>>(),
-);
 const mockVerifyTypedData = vi.hoisted(() => vi.fn());
 
-vi.mock("../../lib/supabase.js", () => ({
-  supabase: {
-    from: (table: string) => {
-      if (table === "api_key_recipients") {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => mockRecipients(),
-            }),
-          }),
-        };
-      }
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              single: mockSingle,
-            }),
-          }),
-        }),
-        insert: () => Promise.resolve({ error: null }),
-        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
-      };
+// The facilitator is open — there is no api_keys lookup to mock any more.
+// What we DO mock is the Redis store, so the rate limiter that replaced the
+// API key runs for real against an in-memory fake.
+const fakeRedis = vi.hoisted(() => {
+  const store = new Map<string, number | string>();
+  return {
+    store,
+    incr: async (k: string) => {
+      const n = Number(store.get(k) ?? 0) + 1;
+      store.set(k, n);
+      return n;
     },
-  },
+    decr: async (k: string) => {
+      const n = Number(store.get(k) ?? 0) - 1;
+      store.set(k, n);
+      return n;
+    },
+    expire: async () => 1,
+    get: async (k: string) => store.get(k) ?? null,
+    set: async (k: string, v: string, o?: { nx?: boolean }) => {
+      if (o?.nx && store.has(k)) return null;
+      store.set(k, v);
+      return "OK";
+    },
+  };
+});
+
+vi.mock("../../lib/redis.js", () => ({
+  getRedis: () => fakeRedis,
+  resetRedisForTests: () => {},
 }));
 
 // Mock viem modules before importing handler
@@ -107,13 +108,9 @@ const validBody = {
 
 function makeRequest(options: {
   method?: string;
-  apiKey?: string;
   body?: unknown;
 }): Request {
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (options.apiKey) {
-    headers.set("x-api-key", options.apiKey);
-  }
   return new Request("https://example.com/api/verify", {
     method: options.method ?? "POST",
     headers,
@@ -129,19 +126,10 @@ function makeRequest(options: {
 describe("POST /api/verify (EIP-3009)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The fake Redis is module-scoped, so rate-limit counters and gas budgets
+    // would otherwise leak from one test into the next.
+    fakeRedis.store.clear();
     vi.stubEnv("API_KEY", "test-secret");
-    mockSingle.mockResolvedValue({
-      data: {
-        id: "key-id",
-        user_id: "user-id",
-        recipient_address: "0x2222222222222222222222222222222222222222",
-        chain_id: 137,
-      },
-      error: null,
-    });
-    // Default: no recipients table rows → handler falls back to
-    // api_keys.recipient_address as a single-element allowlist.
-    mockRecipients.mockResolvedValue({ data: null });
     mockVerifyTypedData.mockResolvedValue(true);
     mockPublicClient.simulateContract.mockResolvedValue({ result: undefined });
     mockPublicClient.estimateContractGas.mockResolvedValue(80_000n);
@@ -156,17 +144,13 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(res.status).toBe(405);
   });
 
-  it("returns 401 when X-API-Key header is missing", async () => {
-    const res = await handler(makeRequest({ method: "POST", body: {} }));
-    expect(res.status).toBe(401);
-  });
-
-  it("returns 401 when X-API-Key header is wrong", async () => {
-    mockSingle.mockResolvedValue({ data: null, error: "Not found" });
-    const res = await handler(
-      makeRequest({ method: "POST", apiKey: "wrong-key", body: {} }),
-    );
-    expect(res.status).toBe(401);
+  // Open facilitator: no credential, real answer. /verify spends no gas — it is
+  // a read-only simulation — so there is nothing here an API key could protect.
+  it("does not require an API key — an unauthenticated verify is processed", async () => {
+    const res = await handler(makeRequest({ method: "POST", body: validBody }));
+    expect(res.status).toBe(200);
+    const data: any = await res.json();
+    expect(data.isValid).toBe(true);
   });
 
   it("returns 400 for invalid JSON", async () => {
@@ -174,7 +158,6 @@ describe("POST /api/verify (EIP-3009)", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": "test-secret",
       },
       body: "not valid json{{{",
     });
@@ -187,7 +170,6 @@ describe("POST /api/verify (EIP-3009)", () => {
   it("returns 400 when authorization is missing", async () => {
     const res = await handler(
       makeRequest({
-        apiKey: "test-secret",
         body: {
           paymentPayload: { payload: {} },
           paymentRequirements: {},
@@ -200,7 +182,7 @@ describe("POST /api/verify (EIP-3009)", () => {
   it("returns 400 when nonce is already used", async () => {
     mockPublicClient.readContract.mockResolvedValue(true); // nonce used
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -211,7 +193,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     const expiredBody = structuredClone(validBody);
     expiredBody.paymentPayload.payload.authorization.validBefore = "1000"; // way in the past
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: expiredBody }),
+      makeRequest({ body: expiredBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -223,7 +205,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     mismatchBody.paymentPayload.payload.authorization.to =
       "0x3333333333333333333333333333333333333333";
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: mismatchBody }),
+      makeRequest({ body: mismatchBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -234,7 +216,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     mockPublicClient.readContract.mockResolvedValue(false); // nonce not used
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(200);
     const data: any = await res.json();
@@ -248,7 +230,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     expiredBody.paymentPayload.payload.authorization.validBefore = "1000";
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: expiredBody }),
+      makeRequest({ body: expiredBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -262,7 +244,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     mockPublicClient.readContract.mockRejectedValue(new Error("RPC error"));
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(503);
     const data: any = await res.json();
@@ -277,7 +259,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     mockPublicClient.getBalance.mockResolvedValue(1n); // ~zero
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(503);
     const data: any = await res.json();
@@ -291,7 +273,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     );
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -303,7 +285,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     mockVerifyTypedData.mockResolvedValue(false);
 
     const res = await handler(
-      makeRequest({ apiKey: "test-secret", body: validBody }),
+      makeRequest({ body: validBody }),
     );
     expect(res.status).toBe(400);
     const data: any = await res.json();
@@ -313,88 +295,25 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(data.invalidReason).toBe("invalid_signature");
   });
 
-  describe("allowlist (api_key_recipients)", () => {
-    const RECIPIENT_A = "0xAAaaAAAAAAaaaaaaaAaaaAaaAaAaAAaAAAaaAaAa";
-    const RECIPIENT_B = "0xBbbbbbbBBBbbBbBBbbbbbbBbBbbbbBBbbBBBbBBB";
+  describe("open facilitator — what replaced the API key", () => {
+    const STRANGER = "0xAAaaAAAAAAaaaaaaaAaaaAaaAaAaAAaAAAaaAaAa";
+    const OTHER = "0xBbbbbbbBBBbbBbBBbbbbbbBbBbbbbBBbbBBBbBBB";
 
-    beforeEach(() => {
-      // Different primary than what the allowlist will hold — this proves
-      // the handler reads from api_key_recipients, not from
-      // api_keys.recipient_address, when the allowlist is populated.
-      mockSingle.mockResolvedValue({
-        data: {
-          id: "key-id",
-          user_id: "user-id",
-          recipient_address: "0x9999999999999999999999999999999999999999",
-          chain_id: 137,
-        },
-        error: null,
-      });
-      mockPublicClient.readContract.mockResolvedValue(false); // nonce unused
-    });
-
-    it("accepts payment to recipient A registered in the allowlist", async () => {
-      mockRecipients.mockResolvedValue({
-        data: [
-          { recipient_address: RECIPIENT_A },
-          { recipient_address: RECIPIENT_B },
-        ],
-      });
-
+    it("verifies a payment to a payTo nobody registered", async () => {
       const body = structuredClone(validBody);
-      body.paymentPayload.payload.authorization.to = RECIPIENT_A;
-      body.paymentRequirements.payTo = RECIPIENT_A;
-
-      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      body.paymentPayload.payload.authorization.to = STRANGER;
+      body.paymentRequirements.payTo = STRANGER;
+      const res = await handler(makeRequest({ body }));
       expect(res.status).toBe(200);
       const data: any = await res.json();
       expect(data.isValid).toBe(true);
     });
 
-    it("accepts payment to recipient B (same key, different recipient)", async () => {
-      mockRecipients.mockResolvedValue({
-        data: [
-          { recipient_address: RECIPIENT_A },
-          { recipient_address: RECIPIENT_B },
-        ],
-      });
-
+    it("rejects when the signed `to` disagrees with the declared payTo", async () => {
       const body = structuredClone(validBody);
-      body.paymentPayload.payload.authorization.to = RECIPIENT_B;
-      body.paymentRequirements.payTo = RECIPIENT_B;
-
-      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
-      expect(res.status).toBe(200);
-      const data: any = await res.json();
-      expect(data.isValid).toBe(true);
-    });
-
-    it("rejects payment to an address not in the allowlist", async () => {
-      mockRecipients.mockResolvedValue({
-        data: [{ recipient_address: RECIPIENT_A }],
-      });
-
-      const body = structuredClone(validBody);
-      body.paymentPayload.payload.authorization.to = RECIPIENT_B;
-      body.paymentRequirements.payTo = RECIPIENT_B;
-
-      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
-      expect(res.status).toBe(400);
-      const data: any = await res.json();
-      expect(data.invalidReason).toBe("invalid_pay_to");
-      expect(data.error).toContain("allowlist");
-    });
-
-    it("rejects payment when allowlist is populated but primary is not in it", async () => {
-      // Primary is 0x9999..., allowlist holds A only. Payment to primary
-      // should fail because the allowlist overrides the primary fallback
-      // when it has at least one row.
-      mockRecipients.mockResolvedValue({
-        data: [{ recipient_address: RECIPIENT_A }],
-      });
-
-      const body = structuredClone(validBody); // pays to 0x2222...
-      const res = await handler(makeRequest({ apiKey: "test-secret", body }));
+      body.paymentPayload.payload.authorization.to = STRANGER;
+      body.paymentRequirements.payTo = OTHER;
+      const res = await handler(makeRequest({ body }));
       expect(res.status).toBe(400);
       const data: any = await res.json();
       expect(data.invalidReason).toBe("invalid_pay_to");

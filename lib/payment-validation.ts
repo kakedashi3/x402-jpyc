@@ -23,6 +23,23 @@ export const JPYC = {
   EIP712_VERSION: POLYGON.eip712Version,
 } as const;
 
+/**
+ * Dust floor for a sponsored settle, in JPYC (whole yen).
+ *
+ * The facilitator pays the on-chain gas, so an amount worth less than that gas
+ * is a pure subsidy drain. But x402 exists FOR micropayments (pay-per-call,
+ * pay-per-crawl), so this floor has to stay under the smallest payment anyone
+ * would actually want to make. Polygon `transferWithAuthorization` runs about
+ * ¥0.08 of gas, so ¥1 keeps the subsidy near 8% of the payment while leaving
+ * per-call pricing intact. The daily budget, not this floor, is the real bound
+ * on abuse — this only stops someone draining it with dust.
+ *
+ * Operators who want true sub-yen payments should self-host and set this to 0.
+ */
+export const MIN_SETTLE_JPYC = Number(process.env.MIN_SETTLE_JPYC ?? 1);
+/** Same floor in wei-JPYC (18 decimals) — what the authorization carries. */
+export const MIN_SETTLE_VALUE = BigInt(MIN_SETTLE_JPYC) * 10n ** 18n;
+
 const SUPPORTED_X402_VERSIONS = new Set([1, 2]);
 
 const AUTH_STATE_ABI = parseAbi([
@@ -59,6 +76,7 @@ export type PaymentErrorCode =
   | "invalid_chain_id"
   | "invalid_pay_to"
   | "invalid_amount"
+  | "amount_below_minimum"
   | "invalid_asset"
   | "invalid_scheme"
   | "invalid_network"
@@ -217,7 +235,6 @@ function resolveSchemeAndNetwork(
 
 export async function validatePayment(
   body: PaymentRequestBody,
-  allowlist: readonly Address[],
   publicClient: PublicClient,
   chain: ChainConfig = POLYGON,
 ): Promise<ValidationResult> {
@@ -360,18 +377,18 @@ export async function validatePayment(
       "Invalid paymentRequirements.payTo address",
     );
   }
-  if (!allowlist.includes(declaredPayTo)) {
+  // The one invariant that makes an open facilitator safe: the recipient the
+  // buyer actually SIGNED (`authorization.to`, covered by the EIP-3009 EIP-712
+  // digest) must equal the recipient the seller DECLARED (`paymentRequirements
+  // .payTo`). The facilitator cannot redirect funds — `to` is inside the signed
+  // payload — so an open endpoint cannot be used to steal. Binding the two
+  // fields is what stops a seller/relay from settling a buyer's signature
+  // against a payTo the buyer never agreed to.
+  if (toAddr !== declaredPayTo) {
     return fail(
       400,
       "invalid_pay_to",
-      "paymentRequirements.payTo is not in registered payTo allowlist",
-    );
-  }
-  if (!allowlist.includes(toAddr)) {
-    return fail(
-      400,
-      "invalid_pay_to",
-      "Authorization 'to' is not in registered payTo allowlist",
+      `Authorization 'to' (${toAddr}) does not match paymentRequirements.payTo (${declaredPayTo})`,
     );
   }
 
@@ -382,6 +399,17 @@ export async function validatePayment(
     if (value <= 0n) throw new Error();
   } catch {
     return fail(400, "invalid_amount", "Invalid authorization value");
+  }
+
+  // Dust floor. The facilitator sponsors gas, so a settle worth less than the
+  // gas it costs is a pure subsidy drain. Keeps sponsored gas a small fraction
+  // of the value moved. JPYC is 18-decimal, so this is denominated in wei-JPYC.
+  if (value < MIN_SETTLE_VALUE) {
+    return fail(
+      400,
+      "amount_below_minimum",
+      `Authorization value ${value} is below the facilitator minimum of ${MIN_SETTLE_VALUE} (${MIN_SETTLE_JPYC} JPYC)`,
+    );
   }
 
   if (!paymentRequirements.amount) {

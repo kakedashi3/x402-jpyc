@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>yen402 — a free, open x402 facilitator for JPYC</title>
+    <meta
+      name="description"
+      content="Free public x402 facilitator settling JPYC (yen stablecoin) on Polygon, Ethereum, Avalanche and Kaia. No API key, no account, no fees. Gas sponsored."
+    />
+    <style>
+      :root {
+        --fg: #17171a;
+        --muted: #5f6168;
+        --line: #e4e4e8;
+        --bg: #fff;
+        --accent: #1a5fd4;
+        --code-bg: #f6f7f9;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e8e8ec;
+          --muted: #9a9ca4;
+          --line: #2a2b31;
+          --bg: #131418;
+          --accent: #6ea8ff;
+          --code-bg: #1c1d23;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 3rem 1.25rem 5rem;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+          Roboto, "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main { max-width: 46rem; margin: 0 auto; }
+      h1 { font-size: 2rem; margin: 0 0 0.35rem; letter-spacing: -0.02em; }
+      .tagline { color: var(--muted); margin: 0 0 2.5rem; font-size: 1.05rem; }
+      h2 {
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 2.75rem 0 0.85rem;
+        font-weight: 600;
+      }
+      code, pre {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+        font-size: 0.875rem;
+      }
+      pre {
+        background: var(--code-bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.9rem 1rem;
+        overflow-x: auto;
+      }
+      code:not(pre code) {
+        background: var(--code-bg);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+      }
+      table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+      th, td {
+        text-align: left;
+        padding: 0.5rem 0.75rem 0.5rem 0;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      th { color: var(--muted); font-weight: 600; }
+      a { color: var(--accent); }
+      .lede { font-size: 1.05rem; }
+      ul { padding-left: 1.15rem; }
+      li { margin: 0.3rem 0; }
+      footer {
+        margin-top: 3.5rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+      footer p { margin: 0.25rem 0; }
+      .scroll { overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>yen402</h1>
+      <p class="tagline">
+        A free, open x402 facilitator for <strong>JPYC</strong> — the yen
+        stablecoin. No API key. No account. No fees.
+      </p>
+
+      <p class="lede">
+        Point your x402 middleware at <code>https://yen402.com</code> and your
+        API can charge in yen. Buyers pay with an EIP-3009 signed authorization,
+        so they need no gas — yen402 sponsors the on-chain settlement.
+      </p>
+
+      <h2>Use it</h2>
+      <pre><code>FACILITATOR_URL=https://yen402.com</code></pre>
+      <p>
+        That is the whole setup. There is nothing to register: the recipient of
+        a payment is the address the buyer signed, so the facilitator has no
+        need to know who you are — and no ability to send your money anywhere
+        else.
+      </p>
+
+      <h2>Endpoints</h2>
+      <div class="scroll">
+        <table>
+          <tr>
+            <th>Method</th><th>Path</th><th>What it does</th>
+          </tr>
+          <tr>
+            <td><code>POST</code></td><td><code>/verify</code></td>
+            <td>Validate an EIP-3009 payment authorization. Read-only.</td>
+          </tr>
+          <tr>
+            <td><code>POST</code></td><td><code>/settle</code></td>
+            <td>Validate, then broadcast <code>transferWithAuthorization</code>. yen402 pays the gas.</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td><td><code>/supported</code></td>
+            <td>Chains, asset, and every limit below — as JSON.</td>
+          </tr>
+          <tr>
+            <td><code>GET</code></td><td><code>/health</code></td>
+            <td>Health check.</td>
+          </tr>
+        </table>
+      </div>
+
+      <h2>Chains</h2>
+      <p>
+        JPYC is deployed at the same address on every chain below —
+        <code>0xe7c3d8c9a439fede00d2600032d5db0be71c3c29</code>, 18 decimals,
+        EIP-3009.
+      </p>
+      <div class="scroll">
+        <table>
+          <tr><th>Chain</th><th>Network</th></tr>
+          <tr><td>Polygon</td><td><code>eip155:137</code></td></tr>
+          <tr><td>Ethereum</td><td><code>eip155:1</code></td></tr>
+          <tr><td>Avalanche C-Chain</td><td><code>eip155:43114</code></td></tr>
+          <tr><td>Kaia</td><td><code>eip155:8217</code></td></tr>
+          <tr><td>Polygon Amoy (testnet)</td><td><code>eip155:80002</code></td></tr>
+        </table>
+      </div>
+
+      <h2>Limits</h2>
+      <p>
+        yen402 pays the gas for every settlement, so the subsidy is bounded —
+        and the bounds are published here rather than hidden behind a signup.
+        Live values are in <a href="/supported"><code>/supported</code></a>.
+      </p>
+      <ul>
+        <li><strong>Rate limit</strong> — 4 requests/second, 480/minute, per IP and per payer.</li>
+        <li>
+          <strong>Sponsored gas</strong> — per chain, resetting at 00:00 UTC.
+          Gas is not comparable across chains: one settlement is about ¥0.06 on
+          Polygon and <strong>¥252 on Ethereum</strong>.
+          <br />Polygon &amp; Kaia <strong>5,000/day</strong> ·
+          Avalanche <strong>100/day</strong> ·
+          Ethereum <strong>10/day</strong>.
+        </li>
+        <li><strong>Minimum settlement</strong> — ¥1, so sponsored gas stays a small fraction of the payment.</li>
+      </ul>
+      <p>
+        Need more than that? Don't ask us for a quota —
+        <a href="https://github.com/kakedashi3/x402-jpyc">run your own</a>. The
+        facilitator is MIT-licensed and deploys to Vercel in a few minutes.
+      </p>
+
+      <h2>Source</h2>
+      <p>
+        <a href="https://github.com/kakedashi3/x402-jpyc"
+          >github.com/kakedashi3/x402-jpyc</a
+        >
+        — MIT. Issues and pull requests welcome.
+      </p>
+
+      <footer>
+        <p>※ 本サービスは JPYC 株式会社による公式コンテンツではありません。</p>
+        <p>※ 「JPYC」は JPYC 株式会社の提供するステーブルコインです。</p>
+        <p>※ JPYC 及び JPYC ロゴは、JPYC 株式会社の登録商標です。</p>
+        <p style="margin-top: 0.9rem">
+          An independent open-source project by
+          <a href="https://github.com/kakedashi3">kakedashi3</a>. Not affiliated
+          with JPYC Inc. or Coinbase.
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>

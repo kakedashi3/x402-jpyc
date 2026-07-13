@@ -2,16 +2,14 @@ export const config = {
   runtime: "edge",
 };
 
-import { getAddress, type Address, type Hex } from "viem";
-import { supabase } from "../lib/supabase";
+import { type Hex } from "viem";
 import { claimNonce } from "../lib/replay.js";
-import { logUsage } from "../lib/usage-log.js";
 import {
   ChainNotSupportedError,
   getFacilitatorAccount,
   getPublicClient,
   getWalletClient,
-  resolveChain,
+  resolveChainByNetworkId,
   type ChainConfig,
 } from "../lib/chain-config.js";
 import {
@@ -21,6 +19,10 @@ import {
   type PaymentRequestBody,
 } from "../lib/payment-validation.js";
 import { notifyTagamie } from "../lib/tagamie-webhook.js";
+import { checkRateLimit, callerIp } from "../lib/ratelimit.js";
+import { reserveSettlement, releaseSettlement } from "../lib/gas-budget.js";
+import { corsHeaders, preflight } from "../lib/cors.js";
+import { networkFromBody } from "../lib/request-network.js";
 
 const _facilitatorAccount = getFacilitatorAccount();
 
@@ -29,71 +31,77 @@ function json(
   status = 200,
   headers?: Record<string, string>,
 ): Response {
-  return Response.json(data, { status, headers });
+  return Response.json(data, {
+    status,
+    headers: { ...corsHeaders(), ...(headers ?? {}) },
+  });
 }
 
-async function hashApiKey(apiKey: string): Promise<string> {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(apiKey),
-  );
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
+/**
+ * POST /settle — open, unauthenticated.
+ *
+ * This is where the facilitator spends its own gas, so this is where the API
+ * key used to sit. The key was the wrong control: it could not stop theft (the
+ * recipient is inside the buyer's EIP-3009 signature, so a payment cannot be
+ * redirected) and it did stop adoption (a stranger could not point their x402
+ * middleware at yen402 without registering first). The gas is now defended the
+ * way the rest of the x402 directory defends it — a rate limit and a published
+ * daily budget — and the budget is a bound we can put in the docs.
+ */
 export default async function handler(req: Request): Promise<Response> {
+  const pre = preflight(req);
+  if (pre) return pre;
+
   if (req.method !== "POST") {
     return json({ error: "Method not allowed" }, 405);
   }
 
-  const providedKey = req.headers.get("x-api-key");
-  if (!providedKey) {
-    return json({ error: "Unauthorized" }, 401);
+  const rl = await checkRateLimit({ ip: callerIp(req) });
+  if (!rl.ok) {
+    return json(
+      {
+        success: false,
+        errorReason: "rate_limited",
+        transaction: "",
+        error: `Rate limit exceeded (${rl.limit} per ${rl.window} per ${rl.scope}). Run your own facilitator for unlimited use — the image is open source.`,
+        code: "rate_limited",
+      },
+      429,
+      { "retry-after": String(rl.retryAfter ?? 1) },
+    );
   }
 
-  const keyHash = await hashApiKey(providedKey);
-  const { data: keyRow, error: keyError } = await supabase
-    .from("api_keys")
-    .select("id, user_id, recipient_address, chain_id")
-    .eq("api_key_hash", keyHash)
-    .eq("is_active", true)
-    .single();
-
-  if (keyError || !keyRow) {
-    return json({ error: "Unauthorized" }, 401);
+  let body: PaymentRequestBody;
+  try {
+    body = (await req.json()) as PaymentRequestBody;
+  } catch {
+    return json(
+      {
+        success: false,
+        errorReason: "invalid_request",
+        transaction: "",
+        error: "Invalid JSON body",
+        code: "invalid_request",
+      },
+      400,
+    );
   }
 
-  // Resolve the allowlist of payTo addresses for this api_key. Prefer the
-  // api_key_recipients table; fall back to api_keys.recipient_address for
-  // rows that pre-date the backfill or somehow skipped it.
-  const { data: recipientRows } = await supabase
-    .from("api_key_recipients")
-    .select("recipient_address")
-    .eq("api_key_id", keyRow.id)
-    .eq("is_active", true);
-
-  const allowlist: Address[] =
-    recipientRows && recipientRows.length > 0
-      ? recipientRows.map((r: { recipient_address: string }) =>
-          getAddress(r.recipient_address),
-        )
-      : [getAddress(keyRow.recipient_address)];
-
-  const requestedChainId = (keyRow.chain_id as number | null) ?? 137;
-
+  // Chain comes from the payment's own `network`, not from a chain id bound to
+  // an API key row. `validatePayment` asserts payload and requirements agree.
   let chain: ChainConfig;
   try {
-    chain = resolveChain(requestedChainId);
+    chain = resolveChainByNetworkId(networkFromBody(body));
   } catch (err) {
     if (err instanceof ChainNotSupportedError) {
       return json(
         {
           success: false,
-          errorReason: "invalid_chain_id",
+          errorReason: "invalid_network",
           transaction: "",
-          error: err.message,
-          code: "invalid_chain_id",
+          error:
+            "Unsupported network. yen402 settles JPYC on Ethereum, Polygon, Polygon Amoy, Avalanche and Kaia.",
+          code: "invalid_network",
         },
         400,
       );
@@ -115,29 +123,7 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ error: `Service not configured: ${message}` }, 503);
   }
 
-  let body: PaymentRequestBody;
-  try {
-    body = (await req.json()) as PaymentRequestBody;
-  } catch {
-    return json(
-      {
-        success: false,
-        errorReason: "invalid_request",
-        transaction: "",
-        network: chain.networkId,
-        error: "Invalid JSON body",
-        code: "invalid_request",
-      },
-      400,
-    );
-  }
-
-  const result = await validatePayment(
-    body,
-    allowlist,
-    publicClient,
-    chain,
-  );
+  const result = await validatePayment(body, publicClient, chain);
   if (!result.ok) {
     return json(
       {
@@ -196,6 +182,30 @@ export default async function handler(req: Request): Promise<Response> {
   }
   const replayHeader = claim.mode === "fail_open" ? "degraded" : "normal";
 
+  // Reserve one settlement from today's sponsored-gas budget. This is the hard
+  // bound on what a stranger can cost us now that there is no API key: the loss
+  // is capped at DAILY_SETTLE_BUDGET settlements of gas, and that number is
+  // published in /supported and the README rather than hidden behind an auth
+  // wall. Fails closed — we never broadcast gas we cannot account for.
+  const budget = await reserveSettlement(chain.chainId);
+  if (!budget.ok) {
+    const exhausted = budget.mode === "normal";
+    return json(
+      {
+        success: false,
+        errorReason: exhausted ? "budget_exhausted" : "service_unavailable",
+        payer: fromAddr,
+        transaction: "",
+        network: chain.networkId,
+        error: exhausted
+          ? `Daily sponsored-gas budget exhausted for ${chain.name} (${budget.limit} settlements/day, resets 00:00 UTC). Gas differs by orders of magnitude across chains, so each has its own cap — try Polygon or Kaia, or run your own facilitator.`
+          : "Gas-budget store unavailable; please retry",
+        code: exhausted ? "budget_exhausted" : "service_unavailable",
+      },
+      exhausted ? 429 : 503,
+    );
+  }
+
   let v: number;
   let r: Hex;
   let s: Hex;
@@ -203,6 +213,8 @@ export default async function handler(req: Request): Promise<Response> {
     ({ v, r, s } = splitEip3009Signature(signature));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Never broadcast — hand the budget reservation back.
+    await releaseSettlement(chain.chainId);
     return json(
       {
         success: false,
@@ -251,8 +263,6 @@ export default async function handler(req: Request): Promise<Response> {
         timestamp: now,
       }),
     );
-
-    logUsage({ apiKeyId: keyRow.id, event: "settle_success", createdAt: now });
 
     // Mainnet only — Tagamie's chain enum doesn't include testnets.
     // isMainnet filters out amoy at runtime; the cast tells TS that
