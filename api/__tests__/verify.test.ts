@@ -77,7 +77,7 @@ const JPYC_ADDRESS = "0xe7c3d8c9a439fede00d2600032d5db0be71c3c29";
 const validAuth = {
   from: "0x1111111111111111111111111111111111111111",
   to: "0x2222222222222222222222222222222222222222",
-  value: "1000000000000000000",
+  value: "10000000000000000000",
   validAfter: "0",
   validBefore: String(Math.floor(Date.now() / 1000) + 3600),
   nonce: "0x" + "aa".repeat(32),
@@ -100,7 +100,7 @@ const validBody = {
     scheme: "exact",
     network: "eip155:137",
     asset: JPYC_ADDRESS,
-    amount: "1000000000000000000",
+    amount: "10000000000000000000",
     payTo: "0x2222222222222222222222222222222222222222",
     extra: { name: "JPY Coin", version: "1" },
   },

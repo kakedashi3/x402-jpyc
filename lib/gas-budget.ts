@@ -11,19 +11,20 @@ import { SUPPORTED_CHAIN_IDS, resolveChain } from "./chain-config.js";
  * /day".
  *
  * The budget MUST be per chain, because gas is not remotely comparable across
- * them. One settlement is roughly:
+ * them. Measured 2026-07-13 at ~65k gas per settlement:
  *
- *   Kaia       ¥0.03      Polygon    ¥0.06
- *   Avalanche  ¥5.25      Ethereum   ¥252
+ *   Kaia     27 gwei → ~¥0.03      Polygon  282 gwei → ~¥0.55
  *
- * A single shared budget of 1,000 settlements/day is ¥63 of exposure on Polygon
- * and ¥252,000 on Ethereum. So each chain gets a cap sized to what a free public
- * service can afford to give away, and every cap is published in `/supported`.
+ * Those are point-in-time readings and they MOVE. An earlier version of this
+ * comment guessed ¥0.06 for Polygon and was wrong by 9x, which is exactly why
+ * no number here should be trusted: `/supported` reads the wallet and reports
+ * what we can actually afford, and `gas-balance.ts` is the check that enforces
+ * it. Estimates go stale; the chain does not.
  *
- * Ethereum mainnet is deliberately tiny: sponsoring ¥252 of gas to move a ¥100
- * micropayment is not a service, it is a leak. x402 on L1 barely makes economic
- * sense in the first place — settle on Polygon or Kaia, or self-host and raise
- * the cap to whatever your own wallet can bear.
+ * Which means the budget only caps the RATE. What bounds the actual loss is the
+ * gas we choose to fund the wallet with — `chainAvailability()` refuses to
+ * broadcast when the wallet cannot pay, so an unfunded chain costs a stranger
+ * nothing, and costs us nothing.
  *
  * Fails CLOSED on Redis trouble: never broadcast gas we cannot account for.
  * (The rate limiter fails open — it is a courtesy control. This is the wallet.)
@@ -41,11 +42,10 @@ import { SUPPORTED_CHAIN_IDS, resolveChain } from "./chain-config.js";
  * does not offer that chain at all.
  *
  * **Ethereum and Avalanche are not offered.** Not because the code cannot settle
- * there — it can, and a self-hoster should — but because sponsoring gas there is
- * not a service. One settlement costs ~¥252 on Ethereum mainnet; paying that to
- * move a ¥100 micropayment is a leak with a nice UI. JPYC's real x402 volume is
- * on Polygon and Kaia, and those are the chains where a sponsored facilitator
- * makes economic sense.
+ * there — it can, and a self-hoster should — but because L1 gas costs orders of
+ * magnitude more than the micropayments x402 exists for. Sponsoring it is a leak
+ * with a nice UI. JPYC's real x402 volume is on Polygon and Kaia, and those are
+ * the chains where a sponsored facilitator makes economic sense.
  *
  * Advertising a chain you will not fund is worse than not listing it: the caller
  * finds out at the moment money moves. Set `DAILY_SETTLE_BUDGET_1=100` (and fund
@@ -55,12 +55,12 @@ export function budgetForChain(chainId: number): number {
   const override = process.env[`DAILY_SETTLE_BUDGET_${chainId}`];
   if (override !== undefined) return Number(override);
   switch (chainId) {
-    case 137: // Polygon — ~¥0.06/settle. 5,000/day ≈ ¥300 of exposure.
-    case 8217: // Kaia — ~¥0.03/settle. 5,000/day ≈ ¥150.
-    case 80002: // Amoy testnet — free.
+    case 137: // Polygon — the main JPYC x402 rail.
+    case 8217: // Kaia — LINE / Unifi distribution.
+    case 80002: // Amoy testnet — gas is free, so cap it generously.
       return 5000;
-    case 1: // Ethereum — ~¥252/settle. Not offered; self-host to enable.
-    case 43114: // Avalanche — ~¥5.25/settle. Not offered; self-host to enable.
+    case 1: // Ethereum — L1 gas dwarfs a micropayment. Self-host to enable.
+    case 43114: // Avalanche — same. Self-host to enable.
       return 0;
     default:
       return 0;

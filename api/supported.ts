@@ -85,7 +85,7 @@ export default async function handler(req: Request): Promise<Response> {
         },
         sponsoredGas: {
           resetsAt: "00:00 UTC",
-          note: "yen402 pays the on-chain gas for every settlement, so the subsidy is capped per chain. Ethereum and Avalanche are not offered: sponsoring ~¥252 of L1 gas to move a ¥100 micropayment is a leak, not a service. Self-host to enable them.",
+          note: "yen402 pays the on-chain gas for every settlement. The per-chain cap bounds the rate; the wallet's balance bounds the loss — see each network's settlementsAffordable, read live from the chain. Ethereum and Avalanche are not offered: L1 gas dwarfs the micropayments x402 exists for. Self-host to enable them.",
         },
         minimumSettlement: {
           jpyc: MIN_SETTLE_JPYC,
