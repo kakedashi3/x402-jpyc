@@ -4,6 +4,7 @@
     { "source": "/verify", "destination": "/api/verify" },
     { "source": "/settle", "destination": "/api/settle" },
     { "source": "/supported", "destination": "/api/supported" },
-    { "source": "/health", "destination": "/api/health" }
+    { "source": "/health", "destination": "/api/health" },
+    { "source": "/", "destination": "/public/index.html" }
   ]
 }
