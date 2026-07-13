@@ -54,7 +54,7 @@ export default async function handler(req: Request): Promise<Response> {
     };
   });
 
-  const budget = await budgetStatus();
+  const budgets = await budgetStatus();
 
   return Response.json(
     {
@@ -68,10 +68,15 @@ export default async function handler(req: Request): Promise<Response> {
           scopes: ["ip", "payer"],
         },
         sponsoredGas: {
-          settlementsPerDay: budget.limit,
-          usedToday: budget.used,
+          // Per chain: one settlement costs ~¥0.03 on Kaia and ~¥252 on
+          // Ethereum, so a single shared cap would be meaningless.
+          perNetwork: budgets.map((b) => ({
+            network: b.network,
+            settlementsPerDay: b.limit,
+            usedToday: b.used,
+          })),
           resetsAt: "00:00 UTC",
-          note: "yen402 pays the on-chain gas for every settlement. The budget is the bound on that subsidy.",
+          note: "yen402 pays the on-chain gas for every settlement. These caps bound that subsidy. Ethereum is intentionally small — L1 gas dwarfs a micropayment. Self-host to raise them.",
         },
         minimumSettlement: {
           jpyc: MIN_SETTLE_JPYC,

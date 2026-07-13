@@ -33,10 +33,22 @@ yen402 sponsors the gas for every settlement, so the subsidy is bounded — and 
 | Limit | Default | Why |
 |---|---|---|
 | Rate limit | 4 req/s, 480/min (per IP and per payer) | Stops one caller monopolising a shared service |
-| Sponsored gas | 1,000 settlements/day, resets 00:00 UTC | The hard bound on what an anonymous caller can cost us |
+| Sponsored gas | **per chain** — see below | The hard bound on what an anonymous caller can cost us |
 | Minimum settlement | ¥1 | Keeps sponsored gas a small fraction of the payment |
 
-Need more? Don't ask for a quota — **run your own**. The facilitator is MIT-licensed and deploys to Vercel in minutes (see *Self-hosting*). Set `MIN_SETTLE_JPYC=0` if you want true sub-yen payments.
+**The gas budget is per chain, because gas is not comparable across chains.** One settlement costs roughly ¥0.03 on Kaia and **¥252 on Ethereum** — a single shared cap would be pocket change on Polygon and a six-figure daily hole on L1.
+
+| Chain | Sponsored settlements/day | ≈ daily exposure |
+|---|---|---|
+| Polygon (`eip155:137`) | 5,000 | ¥300 |
+| Kaia (`eip155:8217`) | 5,000 | ¥150 |
+| Polygon Amoy (testnet) | 5,000 | — |
+| Avalanche (`eip155:43114`) | 100 | ¥525 |
+| **Ethereum** (`eip155:1`) | **10** | ¥2,500 |
+
+Ethereum is deliberately tiny. Sponsoring ¥252 of gas to move a ¥100 micropayment is not a service, it is a leak — settle on Polygon or Kaia.
+
+Need more? Don't ask for a quota — **run your own**. The facilitator is MIT-licensed and deploys to Vercel in minutes (see *Self-hosting*). Set `MIN_SETTLE_JPYC=0` for sub-yen payments and `DAILY_SETTLE_BUDGET_<chainId>` for whatever your own wallet can bear.
 
 ## Why there is no API key
 
@@ -279,7 +291,7 @@ Response:
 | `UPSTASH_REDIS_REST_TOKEN` | Yes | Upstash Redis REST token |
 | `RATE_LIMIT_RPS` | Optional | Requests/second per subject (default `4`) |
 | `RATE_LIMIT_BURST_PER_MIN` | Optional | Requests/minute per subject (default `480`) |
-| `DAILY_SETTLE_BUDGET` | Optional | Sponsored settlements per UTC day (default `1000`) |
+| `DAILY_SETTLE_BUDGET_<chainId>` | Optional | Sponsored settlements per UTC day for one chain, e.g. `DAILY_SETTLE_BUDGET_137=5000`. Defaults are sized by that chain's gas cost. |
 | `MIN_SETTLE_JPYC` | Optional | Dust floor in whole yen (default `1`; set `0` to allow sub-yen payments) |
 
 No database. The settlement path touches the chain and Redis, nothing else.

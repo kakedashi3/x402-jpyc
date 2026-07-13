@@ -126,6 +126,9 @@ function makeRequest(options: {
 describe("POST /api/verify (EIP-3009)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The fake Redis is module-scoped, so rate-limit counters and gas budgets
+    // would otherwise leak from one test into the next.
+    fakeRedis.store.clear();
     vi.stubEnv("API_KEY", "test-secret");
     mockVerifyTypedData.mockResolvedValue(true);
     mockPublicClient.simulateContract.mockResolvedValue({ result: undefined });

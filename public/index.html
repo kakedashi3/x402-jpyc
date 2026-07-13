@@ -160,7 +160,14 @@
       </p>
       <ul>
         <li><strong>Rate limit</strong> — 4 requests/second, 480/minute, per IP and per payer.</li>
-        <li><strong>Sponsored gas</strong> — 1,000 settlements/day, resetting at 00:00 UTC.</li>
+        <li>
+          <strong>Sponsored gas</strong> — per chain, resetting at 00:00 UTC.
+          Gas is not comparable across chains: one settlement is about ¥0.06 on
+          Polygon and <strong>¥252 on Ethereum</strong>.
+          <br />Polygon &amp; Kaia <strong>5,000/day</strong> ·
+          Avalanche <strong>100/day</strong> ·
+          Ethereum <strong>10/day</strong>.
+        </li>
         <li><strong>Minimum settlement</strong> — ¥1, so sponsored gas stays a small fraction of the payment.</li>
       </ul>
       <p>

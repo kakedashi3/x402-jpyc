@@ -69,6 +69,7 @@ const mockWalletClient = {
 vi.stubEnv("FACILITATOR_PRIVATE_KEY", "0x" + "ab".repeat(32));
 vi.stubEnv("POLYGON_RPC_URL", "https://fake-rpc.test");
 vi.stubEnv("AMOY_RPC_URL", "https://fake-amoy-rpc.test");
+vi.stubEnv("ETHEREUM_RPC_URL", "https://fake-eth-rpc.test");
 vi.stubEnv("API_KEY", "test-secret");
 
 let handler: typeof import("../settle.js").default;
@@ -132,6 +133,9 @@ function makeRequest(options: {
 describe("POST /api/settle (EIP-3009)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The fake Redis is module-scoped, so rate-limit counters and gas budgets
+    // would otherwise leak from one test into the next.
+    fakeRedis.store.clear();
     vi.stubEnv("API_KEY", "test-secret");
     mockClaimNonce.mockResolvedValue({ ok: true, mode: "normal" });
     mockVerifyTypedData.mockResolvedValue(true);
@@ -356,9 +360,9 @@ describe("POST /api/settle (EIP-3009)", () => {
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
     });
 
-    it("refuses to broadcast once the daily sponsored-gas budget is spent", async () => {
-      const today = `gasbudget:${new Date().toISOString().slice(0, 10)}`;
-      fakeRedis.store.set(today, 1000); // DAILY_SETTLE_BUDGET default
+    it("refuses to broadcast once the chain's sponsored-gas budget is spent", async () => {
+      const today = `gasbudget:137:${new Date().toISOString().slice(0, 10)}`;
+      fakeRedis.store.set(today, 5000); // Polygon default
 
       const res = await handler(makeRequest({ body: validBody }));
       expect(res.status).toBe(429);
@@ -366,6 +370,29 @@ describe("POST /api/settle (EIP-3009)", () => {
       expect(data.errorReason).toBe("budget_exhausted");
       // The bound has to actually bind: no gas may be spent past it.
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+    });
+
+    // The budget MUST be per chain. One settlement costs ~¥0.06 on Polygon and
+    // ~¥252 on Ethereum, so a shared 5,000/day cap would be ¥300 of exposure on
+    // Polygon and ¥1,260,000 on Ethereum — a stranger could drain the L1 wallet.
+    it("budgets each chain separately — Ethereum's cap is not Polygon's", async () => {
+      const day = new Date().toISOString().slice(0, 10);
+      // Spend Ethereum's entire daily allowance (10), leave Polygon untouched.
+      fakeRedis.store.set(`gasbudget:1:${day}`, 10);
+
+      const ethBody = structuredClone(validBody);
+      ethBody.paymentPayload.network = "eip155:1";
+      ethBody.paymentRequirements.network = "eip155:1";
+
+      const eth = await handler(makeRequest({ body: ethBody }));
+      expect(eth.status).toBe(429);
+      expect((await eth.json()).errorReason).toBe("budget_exhausted");
+      expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
+
+      // Polygon still settles — exhausting L1 must not take the cheap chains
+      // down with it.
+      const poly = await handler(makeRequest({ body: validBody }));
+      expect(poly.status).toBe(200);
     });
 
     it("rate-limits a caller hammering the endpoint from one IP", async () => {

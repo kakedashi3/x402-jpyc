@@ -187,7 +187,7 @@ export default async function handler(req: Request): Promise<Response> {
   // is capped at DAILY_SETTLE_BUDGET settlements of gas, and that number is
   // published in /supported and the README rather than hidden behind an auth
   // wall. Fails closed — we never broadcast gas we cannot account for.
-  const budget = await reserveSettlement();
+  const budget = await reserveSettlement(chain.chainId);
   if (!budget.ok) {
     const exhausted = budget.mode === "normal";
     return json(
@@ -198,7 +198,7 @@ export default async function handler(req: Request): Promise<Response> {
         transaction: "",
         network: chain.networkId,
         error: exhausted
-          ? `Daily sponsored-gas budget exhausted (${budget.limit} settlements/day, resets 00:00 UTC). Run your own facilitator for unlimited settlement — the image is open source.`
+          ? `Daily sponsored-gas budget exhausted for ${chain.name} (${budget.limit} settlements/day, resets 00:00 UTC). Gas differs by orders of magnitude across chains, so each has its own cap — try Polygon or Kaia, or run your own facilitator.`
           : "Gas-budget store unavailable; please retry",
         code: exhausted ? "budget_exhausted" : "service_unavailable",
       },
@@ -214,7 +214,7 @@ export default async function handler(req: Request): Promise<Response> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Never broadcast — hand the budget reservation back.
-    await releaseSettlement();
+    await releaseSettlement(chain.chainId);
     return json(
       {
         success: false,
