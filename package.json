@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@upstash/redis": "^1.38.0",
-    "@vercel/functions": "^3.7.5",
+    "@vercel/functions": "^3.7.6",
     "bs58": "^6.0.0",
     "viem": "^2.54.2"
   },
