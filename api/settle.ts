@@ -2,7 +2,7 @@ export const config = {
   runtime: "edge",
 };
 
-import { type Hex } from "viem";
+import { type Hex, WaitForTransactionReceiptTimeoutError } from "viem";
 import { claimNonce } from "../lib/replay.js";
 import {
   ChainNotSupportedError,
@@ -14,6 +14,7 @@ import {
 } from "../lib/chain-config.js";
 import {
   TRANSFER_WITH_AUTHORIZATION_ABI,
+  reasonFor,
   splitEip3009Signature,
   validatePayment,
   type PaymentRequestBody,
@@ -30,6 +31,17 @@ import { corsHeaders, preflight } from "../lib/cors.js";
 import { networkFromBody } from "../lib/request-network.js";
 
 const _facilitatorAccount = getFacilitatorAccount();
+
+/**
+ * How long /settle waits for the receipt. A settle is the point where the
+ * resource server releases the resource, so "broadcast" is not enough: the
+ * transfer can still revert. Polygon and Kaia confirm in seconds; past this we
+ * answer `settlement_pending` with the hash so the caller can reconcile on chain
+ * (x402 v2 spec §9) instead of being told a payment landed that may not have.
+ */
+const SETTLE_RECEIPT_TIMEOUT_MS = Number(
+  process.env.SETTLE_RECEIPT_TIMEOUT_MS ?? 15_000,
+);
 
 function json(
   data: unknown,
@@ -66,8 +78,9 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: "rate_limited",
+        errorReason: "unexpected_settle_error",
         transaction: "",
+        errorMessage: `Rate limit exceeded (${rl.limit} per ${rl.window} per ${rl.scope}). Run your own facilitator for unlimited use — the image is open source.`,
         error: `Rate limit exceeded (${rl.limit} per ${rl.window} per ${rl.scope}). Run your own facilitator for unlimited use — the image is open source.`,
         code: "rate_limited",
       },
@@ -83,8 +96,9 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: "invalid_request",
+        errorReason: "invalid_payload",
         transaction: "",
+        errorMessage: "Invalid JSON body",
         error: "Invalid JSON body",
         code: "invalid_request",
       },
@@ -104,6 +118,8 @@ export default async function handler(req: Request): Promise<Response> {
           success: false,
           errorReason: "invalid_network",
           transaction: "",
+          errorMessage:
+            "Unsupported network. yen402 settles JPYC on Ethereum, Polygon, Polygon Amoy, Avalanche and Kaia.",
           error:
             "Unsupported network. yen402 settles JPYC on Ethereum, Polygon, Polygon Amoy, Avalanche and Kaia.",
           code: "invalid_network",
@@ -120,9 +136,10 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: "network_not_offered",
+        errorReason: "invalid_network",
         transaction: "",
         network: chain.networkId,
+        errorMessage: `yen402 does not sponsor settlement on ${chain.name}. L1 gas costs orders of magnitude more than the micropayments x402 exists for — settle on Polygon or Kaia, or self-host and fund your own wallet.`,
         error: `yen402 does not sponsor settlement on ${chain.name}. L1 gas costs orders of magnitude more than the micropayments x402 exists for — settle on Polygon or Kaia, or self-host and fund your own wallet.`,
         code: "network_not_offered",
       },
@@ -149,9 +166,10 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: result.code,
+        errorReason: reasonFor(result.code),
         transaction: "",
         network: chain.networkId,
+        errorMessage: result.error,
         error: result.error,
         code: result.code,
       },
@@ -178,10 +196,11 @@ export default async function handler(req: Request): Promise<Response> {
       return json(
         {
           success: false,
-          errorReason: "service_unavailable",
+          errorReason: "unexpected_settle_error",
           payer: fromAddr,
           transaction: "",
           network: chain.networkId,
+          errorMessage: "Replay-protection store unavailable; please retry",
           error: "Replay-protection store unavailable; please retry",
           code: "service_unavailable",
         },
@@ -191,10 +210,11 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: "nonce_already_used",
+        errorReason: "invalid_exact_evm_nonce_already_used",
         payer: fromAddr,
         transaction: "",
         network: chain.networkId,
+        errorMessage: "Authorization nonce already used (replay)",
         error: "Authorization nonce already used (replay)",
         code: "nonce_already_used",
       },
@@ -216,10 +236,11 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: "insufficient_facilitator_gas",
+        errorReason: "unexpected_settle_error",
         payer: fromAddr,
         transaction: "",
         network: chain.networkId,
+        errorMessage: `The facilitator wallet cannot currently pay gas on ${chain.name}. This is our problem, not yours — try another network, or self-host. Live status: /supported`,
         error: `The facilitator wallet cannot currently pay gas on ${chain.name}. This is our problem, not yours — try another network, or self-host. Live status: /supported`,
         code: "insufficient_facilitator_gas",
       },
@@ -233,10 +254,13 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: exhausted ? "budget_exhausted" : "service_unavailable",
+        errorReason: "unexpected_settle_error",
         payer: fromAddr,
         transaction: "",
         network: chain.networkId,
+        errorMessage: exhausted
+          ? `Daily sponsored-gas budget exhausted for ${chain.name} (${budget.limit} settlements/day, resets 00:00 UTC). Gas differs by orders of magnitude across chains, so each has its own cap — try Polygon or Kaia, or run your own facilitator.`
+          : "Gas-budget store unavailable; please retry",
         error: exhausted
           ? `Daily sponsored-gas budget exhausted for ${chain.name} (${budget.limit} settlements/day, resets 00:00 UTC). Gas differs by orders of magnitude across chains, so each has its own cap — try Polygon or Kaia, or run your own facilitator.`
           : "Gas-budget store unavailable; please retry",
@@ -258,10 +282,11 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: "invalid_signature",
+        errorReason: "invalid_exact_evm_signature",
         payer: fromAddr,
         transaction: "",
         network: chain.networkId,
+        errorMessage: `Invalid signature: ${message}`,
         error: `Invalid signature: ${message}`,
         code: "invalid_signature",
       },
@@ -288,6 +313,58 @@ export default async function handler(req: Request): Promise<Response> {
       account: _facilitatorAccount,
       chain: chain.viemChain,
     });
+
+    let receipt;
+    try {
+      receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: SETTLE_RECEIPT_TIMEOUT_MS,
+      });
+    } catch (err) {
+      const pending = err instanceof WaitForTransactionReceiptTimeoutError;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[settle] receipt not confirmed:", message);
+      // Broadcast happened; whether it landed is unknown. Never report success,
+      // never report a clean failure — hand back the hash to reconcile.
+      return json(
+        {
+          success: false,
+          errorReason: "settlement_pending",
+          errorMessage: pending
+            ? `Broadcast, not confirmed within ${SETTLE_RECEIPT_TIMEOUT_MS}ms`
+            : `Broadcast, receipt lookup failed: ${message}`,
+          payer: fromAddr,
+          transaction: txHash,
+          txHash,
+          network: chain.networkId,
+          code: "settlement_pending",
+        },
+        202,
+        { "X-Replay-Protection": replayHeader },
+      );
+    }
+    if (receipt.status !== "success") {
+      console.log(
+        JSON.stringify({
+          event: "settle_reverted",
+          txHash,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+      return json(
+        {
+          success: false,
+          errorReason: "invalid_exact_evm_transaction_failed",
+          errorMessage: "Transaction reverted on chain",
+          payer: fromAddr,
+          transaction: txHash,
+          network: chain.networkId,
+          error: "Transaction reverted on chain",
+          code: "transaction_reverted",
+        },
+        400,
+      );
+    }
 
     const now = new Date().toISOString();
 
@@ -353,11 +430,13 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         success: false,
-        errorReason: "transaction_failed",
+        errorReason: "invalid_exact_evm_transaction_failed",
         payer: fromAddr,
         transaction: "",
         network: chain.networkId,
+        errorMessage: "Transaction execution failed",
         error: "Transaction execution failed",
+        code: "transaction_failed",
       },
       500,
     );

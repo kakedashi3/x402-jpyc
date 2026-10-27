@@ -65,6 +65,8 @@ vi.mock("viem/accounts", () => ({
 
 const mockPublicClient = {
   readContract: vi.fn(),
+  getCode: vi.fn(),
+  waitForTransactionReceipt: vi.fn(),
 };
 
 const mockWalletClient = {
@@ -97,7 +99,7 @@ const validAuth = {
 };
 
 // Last byte 0x1c (v=28) so viem.parseSignature accepts it.
-const validSignature = "0x" + "bb".repeat(64) + "1c";
+const validSignature = "0x" + "bb".repeat(32) + "11".repeat(32) + "1c";
 
 const validBody = {
   paymentPayload: {
@@ -145,6 +147,7 @@ describe("POST /api/settle (EIP-3009)", () => {
     vi.stubEnv("API_KEY", "test-secret");
     mockClaimNonce.mockResolvedValue({ ok: true, mode: "normal" });
     mockVerifyTypedData.mockResolvedValue(true);
+    mockPublicClient.waitForTransactionReceipt.mockResolvedValue({ status: "success" });
     // Default: the facilitator wallet can pay.
     mockChainAvailability.mockResolvedValue({
       available: true,
@@ -314,6 +317,34 @@ describe("POST /api/settle (EIP-3009)", () => {
     expect(res.headers.get("X-Replay-Protection")).toBe("degraded");
   });
 
+  it("does not report success until the receipt confirms — pending carries the hash", async () => {
+    const { WaitForTransactionReceiptTimeoutError } = await import("viem");
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockWalletClient.writeContract.mockResolvedValue("0x" + "cd".repeat(32));
+    mockPublicClient.waitForTransactionReceipt.mockRejectedValue(
+      new WaitForTransactionReceiptTimeoutError({ hash: ("0x" + "cd".repeat(32)) as `0x${string}` }),
+    );
+    const res = await handler(makeRequest({ body: validBody }));
+    expect(res.status).toBe(202);
+    const data: any = await res.json();
+    expect(data.success).toBe(false);
+    expect(data.errorReason).toBe("settlement_pending");
+    expect(data.transaction).toBe("0x" + "cd".repeat(32));
+    expect(data.network).toBe("eip155:137");
+  });
+
+  it("reports a reverted transfer as failed, with the hash", async () => {
+    mockPublicClient.readContract.mockResolvedValue(false);
+    mockWalletClient.writeContract.mockResolvedValue("0x" + "ef".repeat(32));
+    mockPublicClient.waitForTransactionReceipt.mockResolvedValue({ status: "reverted" });
+    const res = await handler(makeRequest({ body: validBody }));
+    expect(res.status).toBe(400);
+    const data: any = await res.json();
+    expect(data.success).toBe(false);
+    expect(data.errorReason).toBe("invalid_exact_evm_transaction_failed");
+    expect(data.transaction).toBe("0x" + "ef".repeat(32));
+  });
+
   it("returns 500 with errorReason, payer, transaction, network when transferWithAuthorization fails", async () => {
     mockPublicClient.readContract.mockResolvedValue(false);
     mockWalletClient.writeContract.mockRejectedValue(
@@ -327,7 +358,8 @@ describe("POST /api/settle (EIP-3009)", () => {
     const data: any = await res.json();
     expect(data.success).toBe(false);
     expect(data.error).toBe("Transaction execution failed");
-    expect(data.errorReason).toBe("transaction_failed");
+    expect(data.errorReason).toBe("invalid_exact_evm_transaction_failed");
+    expect(data.code).toBe("transaction_failed");
     expect(data.payer).toBe("0x1111111111111111111111111111111111111111");
     expect(data.transaction).toBe("");
     expect(data.network).toBe("eip155:137");
@@ -368,7 +400,7 @@ describe("POST /api/settle (EIP-3009)", () => {
       const res = await handler(makeRequest({ body }));
       expect(res.status).toBe(400);
       const data: any = await res.json();
-      expect(data.errorReason).toBe("invalid_pay_to");
+      expect(data.errorReason).toBe("invalid_exact_evm_recipient_mismatch");
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
     });
 
@@ -379,7 +411,8 @@ describe("POST /api/settle (EIP-3009)", () => {
       const res = await handler(makeRequest({ body: validBody }));
       expect(res.status).toBe(429);
       const data: any = await res.json();
-      expect(data.errorReason).toBe("budget_exhausted");
+      expect(data.errorReason).toBe("unexpected_settle_error");
+      expect(data.code).toBe("budget_exhausted");
       // The bound has to actually bind: no gas may be spent past it.
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
     });
@@ -394,7 +427,9 @@ describe("POST /api/settle (EIP-3009)", () => {
 
       const res = await handler(makeRequest({ body: ethBody }));
       expect(res.status).toBe(400);
-      expect((await res.json()).errorReason).toBe("network_not_offered");
+      const notOffered: any = await res.json();
+      expect(notOffered.errorReason).toBe("invalid_network");
+      expect(notOffered.code).toBe("network_not_offered");
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
 
       // The offered chains are unaffected.
@@ -415,7 +450,8 @@ describe("POST /api/settle (EIP-3009)", () => {
       const res = await handler(makeRequest({ body: validBody }));
       expect(res.status).toBe(503);
       const data: any = await res.json();
-      expect(data.errorReason).toBe("insufficient_facilitator_gas");
+      expect(data.errorReason).toBe("unexpected_settle_error");
+      expect(data.code).toBe("insufficient_facilitator_gas");
       expect(mockWalletClient.writeContract).not.toHaveBeenCalled();
 
       // A dry wallet must not silently eat the day's budget either.

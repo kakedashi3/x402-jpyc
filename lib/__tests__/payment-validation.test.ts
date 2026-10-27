@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Hex } from "viem";
 import {
   JPYC,
+  isHighS,
   isValidNonceFormat,
+  reasonFor,
   simulateTransferWithAuthorization,
   splitEip3009Signature,
   validatePayment,
@@ -23,6 +25,19 @@ import {
 import { AMOY, POLYGON } from "../chain-config.js";
 
 const NONCE_A = ("0x" + "aa".repeat(32)) as Hex;
+
+const SECP256K1_N =
+  0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+
+/** The other valid encoding of the same signature: s' = n - s, v flipped. */
+function toHighS(sig: Hex): Hex {
+  const r = sig.slice(2, 66);
+  const s = BigInt(`0x${sig.slice(66, 130)}`);
+  const v = parseInt(sig.slice(130, 132), 16);
+  const highS = (SECP256K1_N - s).toString(16).padStart(64, "0");
+  const flipped = (v === 27 ? 28 : 27).toString(16);
+  return `0x${r}${highS}${flipped}` as Hex;
+}
 const ASSET = JPYC.ADDRESS;
 
 function nowSec(): bigint {
@@ -113,7 +128,7 @@ function makePayment(overrides: Partial<ValidatedPayment> = {}): ValidatedPaymen
     nonce: NONCE_A,
     // Last byte 0x1c (v=28) so viem.parseSignature accepts it; tests
     // exercising downstream RPC calls then run as intended.
-    signature: ("0x" + "bb".repeat(64) + "1c") as Hex,
+    signature: ("0x" + "bb".repeat(32) + "11".repeat(32) + "1c") as Hex,
     ...overrides,
   };
 }
@@ -172,7 +187,7 @@ describe("validatePayment — success cases", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("ok: overpayment (value > maxAmountRequired)", async () => {
+  it("amount_mismatch: overpayment is rejected (exact means exact)", async () => {
     const body = await buildValidBody({
       value: "20000000000000000000",
       amount: "10000000000000000000",
@@ -181,7 +196,13 @@ describe("validatePayment — success cases", () => {
       body,
       asPublicClient(client),
     );
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("amount_mismatch");
+      expect(reasonFor(result.code)).toBe(
+        "invalid_exact_evm_payload_authorization_value_mismatch",
+      );
+    }
   });
 
   it("ok: validAfter < now < validBefore boundary", async () => {
@@ -383,7 +404,7 @@ describe("validatePayment — error cases", () => {
     });
     const result = await validatePayment(body, asPublicClient(client));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe("invalid_pay_to");
+    if (!result.ok) expect(result.code).toBe("recipient_mismatch");
   });
 
   it("ok: an unregistered payTo settles — no allowlist, no API key", async () => {
@@ -400,7 +421,7 @@ describe("validatePayment — error cases", () => {
     if (!result.ok) expect(result.code).toBe("amount_below_minimum");
   });
 
-  it("invalid_amount: value < amount", async () => {
+  it("amount_mismatch: value < amount", async () => {
     const body = await buildValidBody({
       value: "10000000000000000000",
       amount: "20000000000000000000",
@@ -410,7 +431,7 @@ describe("validatePayment — error cases", () => {
       asPublicClient(client),
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe("invalid_amount");
+    if (!result.ok) expect(result.code).toBe("amount_mismatch");
   });
 
   it("authorization_expired: validBefore <= now", async () => {
@@ -423,6 +444,58 @@ describe("validatePayment — error cases", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe("authorization_expired");
+  });
+
+  it("authorization_expired: validBefore inside the 6s settle buffer", async () => {
+    const body = await buildValidBody({
+      validBefore: String(Number(nowSec()) + 3),
+    });
+    const result = await validatePayment(body, asPublicClient(client));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("authorization_expired");
+      expect(reasonFor(result.code)).toBe(
+        "invalid_exact_evm_payload_authorization_valid_before",
+      );
+    }
+  });
+
+  it("authorization_expired: validBefore = 0 is not 'no expiry'", async () => {
+    const body = await buildValidBody({ validBefore: "0" });
+    const result = await validatePayment(body, asPublicClient(client));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("authorization_expired");
+  });
+
+  it("non_canonical_signature: high-s from a payer with no code", async () => {
+    const body = await buildValidBody();
+    const sig = body.paymentPayload!.payload!.signature as Hex;
+    body.paymentPayload!.payload!.signature = toHighS(sig);
+    expect(isHighS(toHighS(sig))).toBe(true);
+    const result = await validatePayment(body, asPublicClient(client));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("non_canonical_signature");
+      expect(reasonFor(result.code)).toBe(
+        "invalid_exact_evm_non_canonical_signature",
+      );
+    }
+  });
+
+  it("high-s from a payer WITH code is left to the token (ERC-1271), as in Go #2454", async () => {
+    client.getCode.mockResolvedValue("0x6001");
+    const body = await buildValidBody();
+    const sig = body.paymentPayload!.payload!.signature as Hex;
+    body.paymentPayload!.payload!.signature = toHighS(sig);
+    const result = await validatePayment(body, asPublicClient(client));
+    expect(result.ok).toBe(true);
+  });
+
+  it("low-s signatures never trigger the code lookup", async () => {
+    const body = await buildValidBody();
+    expect(isHighS(body.paymentPayload!.payload!.signature as Hex)).toBe(false);
+    await validatePayment(body, asPublicClient(client));
+    expect(client.getCode).not.toHaveBeenCalled();
   });
 
   it("authorization_not_yet_valid: validAfter > now", async () => {
@@ -725,6 +798,24 @@ describe("simulateTransferWithAuthorization", () => {
     if (!result.ok) {
       expect(result.code).toBe("simulation_failed");
       expect(result.status).toBe(400);
+    }
+  });
+
+  it("insufficient_funds: a revert with a short payer balance says so", async () => {
+    client.simulateContract.mockRejectedValueOnce(new Error("execution reverted"));
+    client.readContract.mockImplementation(
+      async ({ functionName }: { functionName: string }) =>
+        functionName === "balanceOf" ? 1n : false,
+    );
+    const result = await simulateTransferWithAuthorization(
+      makePayment(),
+      asPublicClient(client),
+      FACILITATOR_ADDRESS,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("insufficient_funds");
+      expect(reasonFor(result.code)).toBe("invalid_exact_evm_insufficient_balance");
     }
   });
 

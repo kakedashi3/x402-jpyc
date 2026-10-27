@@ -10,6 +10,7 @@ import {
   type ChainConfig,
 } from "../lib/chain-config.js";
 import {
+  reasonFor,
   simulateTransferWithAuthorization,
   validatePayment,
   type PaymentRequestBody,
@@ -51,7 +52,8 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         isValid: false,
-        invalidReason: "rate_limited",
+        invalidReason: "unexpected_verify_error",
+        invalidMessage: `Rate limit exceeded (${rl.limit} per ${rl.window} per ${rl.scope}). Run your own facilitator for unlimited use — the image is open source.`,
         error: `Rate limit exceeded (${rl.limit} per ${rl.window} per ${rl.scope}). Run your own facilitator for unlimited use — the image is open source.`,
         code: "rate_limited",
       },
@@ -66,7 +68,8 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         isValid: false,
-        invalidReason: "invalid_request",
+        invalidReason: "invalid_payload",
+        invalidMessage: "Invalid JSON body",
         error: "Invalid JSON body",
         code: "invalid_request",
       },
@@ -83,6 +86,7 @@ export default async function handler(req: Request): Promise<Response> {
         {
           isValid: false,
           invalidReason: "invalid_network",
+          invalidMessage: `Unsupported network. yen402 settles JPYC on Ethereum, Polygon, Polygon Amoy, Avalanche and Kaia.`,
           error: `Unsupported network. yen402 settles JPYC on Ethereum, Polygon, Polygon Amoy, Avalanche and Kaia.`,
           code: "invalid_network",
         },
@@ -109,7 +113,8 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         isValid: false,
-        invalidReason: result.code,
+        invalidReason: reasonFor(result.code),
+        invalidMessage: result.error,
         error: result.error,
         code: result.code,
       },
@@ -127,7 +132,8 @@ export default async function handler(req: Request): Promise<Response> {
     return json(
       {
         isValid: false,
-        invalidReason: sim.code,
+        invalidReason: reasonFor(sim.code),
+        invalidMessage: sim.error,
         payer: result.payment.fromAddr,
         error: sim.error,
         code: sim.code,

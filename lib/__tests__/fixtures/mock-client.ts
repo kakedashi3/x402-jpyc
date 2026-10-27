@@ -7,6 +7,7 @@ export interface MockPublicClient {
   estimateContractGas: Mock;
   getBalance: Mock;
   getGasPrice: Mock;
+  getCode: Mock;
 }
 
 /**
@@ -29,6 +30,7 @@ export function createMockPublicClient(): MockPublicClient {
     estimateContractGas: vi.fn().mockResolvedValue(80_000n),
     getBalance: vi.fn().mockResolvedValue(10n ** 18n),
     getGasPrice: vi.fn().mockResolvedValue(50n * 10n ** 9n),
+    getCode: vi.fn().mockResolvedValue(undefined),
   };
 }
 

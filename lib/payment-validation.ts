@@ -55,6 +55,21 @@ const AUTH_STATE_ABI = parseAbi([
   "function authorizationState(address authorizer, bytes32 nonce) view returns (bool)",
 ]);
 
+const BALANCE_OF_ABI = parseAbi([
+  "function balanceOf(address account) view returns (uint256)",
+]);
+
+/**
+ * How far in the future `validBefore` must sit at verification time. The
+ * authorization has to survive until the settle transaction lands; the x402
+ * reference SDKs (TS/Go/Python) all require 6 seconds, so we do too.
+ */
+const VALID_BEFORE_BUFFER_SEC = 6n;
+
+/** secp256k1 group order / 2 — the EIP-2 low-s bound. */
+const SECP256K1_HALF_N =
+  0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0n;
+
 export const TRANSFER_WITH_AUTHORIZATION_ABI = parseAbi([
   "function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s)",
 ]);
@@ -99,7 +114,55 @@ export type PaymentErrorCode =
   | "simulation_failed"
   | "simulation_timeout"
   | "facilitator_insufficient_native_balance"
-  | "rpc_unavailable";
+  | "rpc_unavailable"
+  | "recipient_mismatch"
+  | "amount_mismatch"
+  | "non_canonical_signature"
+  | "insufficient_funds";
+
+/**
+ * `code` is yen402's own, fine-grained diagnosis (kept for existing callers).
+ * The wire `invalidReason` / `errorReason` must be the code an x402 client
+ * actually matches on, so each internal code maps to the one the reference
+ * SDK (`@x402/evm` exact/facilitator/errors.ts) emits for the same condition,
+ * or to the generic codes of x402 v2 spec §9. Clients MUST match on the
+ * reason, never on message text — so a private vocabulary there is a private
+ * protocol.
+ *
+ * `amount_below_minimum` has no standard equivalent (it is this facilitator's
+ * gas-subsidy policy, not a property of the payment) and stays as is.
+ */
+const REASON: Record<PaymentErrorCode, string> = {
+  invalid_request: "invalid_payload",
+  invalid_signature: "invalid_exact_evm_signature",
+  invalid_chain_id: "invalid_exact_evm_network_mismatch",
+  invalid_pay_to: "invalid_payment_requirements",
+  invalid_amount: "invalid_exact_evm_authorization_value",
+  amount_below_minimum: "amount_below_minimum",
+  invalid_asset: "invalid_payment_requirements",
+  invalid_scheme: "invalid_exact_evm_scheme",
+  invalid_network: "invalid_network",
+  invalid_x402_version: "invalid_x402_version",
+  invalid_extra: "invalid_exact_evm_missing_eip712_domain",
+  invalid_address: "invalid_payload",
+  authorization_expired: "invalid_exact_evm_payload_authorization_valid_before",
+  authorization_not_yet_valid: "invalid_exact_evm_payload_authorization_valid_after",
+  nonce_already_used: "invalid_exact_evm_nonce_already_used",
+  invalid_nonce_format: "invalid_payload",
+  simulation_failed: "invalid_exact_evm_transaction_simulation_failed",
+  simulation_timeout: "unexpected_verify_error",
+  facilitator_insufficient_native_balance: "unexpected_verify_error",
+  rpc_unavailable: "unexpected_verify_error",
+  recipient_mismatch: "invalid_exact_evm_recipient_mismatch",
+  amount_mismatch: "invalid_exact_evm_payload_authorization_value_mismatch",
+  non_canonical_signature: "invalid_exact_evm_non_canonical_signature",
+  insufficient_funds: "invalid_exact_evm_insufficient_balance",
+};
+
+/** The x402 wire reason for an internal code. */
+export function reasonFor(code: PaymentErrorCode): string {
+  return REASON[code];
+}
 
 interface Authorization {
   from?: string;
@@ -200,6 +263,12 @@ const NONCE_HEX_REGEX = /^0x[0-9a-fA-F]{64}$/;
 
 export function isValidNonceFormat(nonce: unknown): nonce is Hex {
   return typeof nonce === "string" && NONCE_HEX_REGEX.test(nonce);
+}
+
+/** True for a plain 65-byte ECDSA signature whose `s` exceeds secp256k1n/2. */
+export function isHighS(sig: Hex): boolean {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(sig)) return false;
+  return BigInt(`0x${sig.slice(66, 130)}`) > SECP256K1_HALF_N;
 }
 
 /**
@@ -396,7 +465,7 @@ export async function validatePayment(
   if (toAddr !== declaredPayTo) {
     return fail(
       400,
-      "invalid_pay_to",
+      "recipient_mismatch",
       `Authorization 'to' (${toAddr}) does not match paymentRequirements.payTo (${declaredPayTo})`,
     );
   }
@@ -431,11 +500,13 @@ export async function validatePayment(
   } catch {
     return fail(400, "invalid_amount", "Invalid paymentRequirements.amount");
   }
-  if (value < requiredAmount) {
+  // `exact` means exact: the token moves whatever `value` the buyer signed, so
+  // an overpayment is not a margin — it is a payment for something else.
+  if (value !== requiredAmount) {
     return fail(
       400,
-      "invalid_amount",
-      `Authorization value ${value} is less than required ${requiredAmount}`,
+      "amount_mismatch",
+      `Authorization value ${value} does not equal required ${requiredAmount}`,
     );
   }
 
@@ -444,11 +515,13 @@ export async function validatePayment(
   const validBefore = BigInt(auth.validBefore ?? "0");
 
   const nowSec = BigInt(Math.floor(Date.now() / 1000));
-  if (validBefore !== 0n && validBefore <= nowSec) {
+  // No `validBefore = 0` escape hatch: EIP-3009 requires `now < validBefore`,
+  // so a zero would only ever revert at settlement.
+  if (validBefore < nowSec + VALID_BEFORE_BUFFER_SEC) {
     return fail(
       400,
       "authorization_expired",
-      "Authorization has expired (validBefore)",
+      `Authorization has expired or expires within ${VALID_BEFORE_BUFFER_SEC}s (validBefore)`,
     );
   }
   if (validAfter > nowSec) {
@@ -486,6 +559,30 @@ export async function validatePayment(
       "invalid_signature",
       "Signature does not match 'from' address",
     );
+  }
+
+  // EIP-2 low-s. A high-s signature is a second encoding of the same
+  // authorization; tokens that enforce canonical signatures revert on it at
+  // settlement. Same gate as the reference SDKs (Go #2454 / TS #2728 / Python
+  // #3912): plain 65-byte signature AND a payer with no code. A payer with code
+  // is asked via ERC-1271 by the token, so the encoding is not ours to judge.
+  // The code lookup only runs on the rare high-s path.
+  if (isHighS(signature as Hex)) {
+    let code: Hex | undefined;
+    try {
+      code = await publicClient.getCode({ address: fromAddr });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[payment-validation] getCode failed:", message);
+      return fail(503, "rpc_unavailable", "Failed to read payer code");
+    }
+    if (!code || code === "0x") {
+      return fail(
+        400,
+        "non_canonical_signature",
+        "Signature is not canonical (s > secp256k1n/2, EIP-2)",
+      );
+    }
   }
 
   try {
@@ -650,6 +747,26 @@ async function runSimulation(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Most reverts here are an empty wallet. Say so with the standard reason
+    // rather than a bare "simulation failed" — it is the one failure the buyer
+    // can fix. Only read on the failure path, so the happy path pays nothing.
+    try {
+      const balance = await publicClient.readContract({
+        address: chain.jpycAddress,
+        abi: BALANCE_OF_ABI,
+        functionName: "balanceOf",
+        args: [fromAddr],
+      });
+      if (typeof balance === "bigint" && balance < value) {
+        return simFail(
+          400,
+          "insufficient_funds",
+          `Payer JPYC balance ${balance} < authorization value ${value}`,
+        );
+      }
+    } catch {
+      // fall through to the generic simulation failure
+    }
     return simFail(400, "simulation_failed", `Simulation reverted: ${message}`);
   }
 
