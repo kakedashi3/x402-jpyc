@@ -216,28 +216,23 @@ The simulation has a hard 3-second timeout. On timeout the response is `503 simu
 
 ## Amount validation policy
 
-The facilitator accepts payments where:
+`exact` means exact. The facilitator accepts a payment only when:
 
 ```
-authorization.value >= paymentRequirements.amount
+authorization.value == paymentRequirements.amount
 ```
 
 | `value` vs `amount` | Result |
 |---|---|
-| `value == amount` | accepted (exact match) |
-| `value > amount` | accepted (overpayment, no refund) |
-| `value < amount` | rejected with `code: invalid_amount` |
-| either is `0` or non-positive | rejected with `code: invalid_amount` |
+| `value == amount` | accepted |
+| `value != amount` (over or under) | rejected — `invalid_exact_evm_payload_authorization_value_mismatch` (`code: amount_mismatch`) |
+| either is `0` or non-positive | rejected — `invalid_exact_evm_authorization_value` / `invalid_payment_requirements` (`code: invalid_amount`) |
 
-### Rationale
+The token moves whatever `value` the buyer signed, so an overpayment is not a margin — it is a payment for something else. This matches the x402 reference SDKs (TS/Go/Python) and the normative rule proposed in x402 #3925. (Until 2026-10 this facilitator accepted overpayment; that divergence is gone.)
 
-- Aligns with x402 v2 conventions.
-- Supports bundling: a single authorization can cover multiple resources whose summed price ≤ `value`.
-- Overpayment is treated as the buyer's deliberate choice; the facilitator does not refund.
+The authorization must also stay valid long enough to settle: `validBefore` must be at least 6 seconds in the future at verification (same buffer as the reference SDKs). `validBefore = 0` is rejected — EIP-3009 requires `now < validBefore`, so it could only revert.
 
-### Difference from `jpyc-x402` reference facilitator
-
-The `jpyc-x402` reference facilitator requires an exact match (`value == amount`). `x402-jpyc` deliberately diverges to accept overpayment for v2 compatibility. Clients written against `jpyc-x402` keep working unchanged; clients that exploit overpayment will not work against `jpyc-x402`.
+A plain 65-byte signature with `s > secp256k1n/2` (EIP-2 high-s) from a payer with no code is rejected (`invalid_exact_evm_non_canonical_signature`), mirroring Go #2454 / TS #2728 / Python #3912.
 
 ## Authentication
 
@@ -292,10 +287,11 @@ Error body (verify):
 ```json
 {
   "isValid": false,
-  "invalidReason": "<error_code>",
+  "invalidReason": "<x402 reason>",
+  "invalidMessage": "<human readable>",
   "payer": "0x<address>",
   "error": "<human readable>",
-  "code": "<error_code>"
+  "code": "<yen402 code>"
 }
 ```
 
@@ -304,39 +300,49 @@ Error body (settle):
 ```json
 {
   "success": false,
-  "errorReason": "<error_code>",
+  "errorReason": "<x402 reason>",
+  "errorMessage": "<human readable>",
   "payer": "0x<address>",
   "transaction": "",
   "network": "eip155:137",
   "error": "<human readable>",
-  "code": "<error_code>"
+  "code": "<yen402 code>"
 }
 ```
 
-`invalidReason` (verify) and `errorReason` (settle) are the v2 canonical machine-readable reason fields. The `code` field is a legacy alias and carries the same value; both will be set for backward compatibility. The `payer` field is included on errors only after the request has been parsed and `from` is known; for early errors (auth, JSON parse, unsupported chain) it is omitted.
+`invalidReason` / `errorReason` carry the code an x402 client matches on: the one the reference SDK (`@x402/evm` `exact/facilitator/errors.ts`) emits for the same condition, or a generic code from x402 v2 spec §9. Clients MUST match on these, never on message text. `code` is yen402's own finer diagnosis, kept for existing callers; `error` duplicates `invalidMessage` / `errorMessage` for the same reason. The `payer` field is included only once `from` is known.
+
+`/settle` waits for the receipt (default 15 s, `SETTLE_RECEIPT_TIMEOUT_MS`). `success: true` means the transfer confirmed. If the transaction was broadcast but not confirmed in time, the response is `202` with `success: false`, `errorReason: "settlement_pending"` and the broadcast hash in `transaction` — reconcile on chain before retrying. A confirmed revert is `invalid_exact_evm_transaction_failed` with the hash.
 
 ### Error code catalog
 
-| Code | HTTP | Meaning |
-|---|---|---|
-| `invalid_request` | 400 | Malformed JSON or missing required fields |
-| `invalid_x402_version` | 400 | `x402Version` not in {1, 2} |
-| `invalid_scheme` | 400 | `scheme` is not `"exact"` |
-| `invalid_chain_id` | 400 | `network` does not match the API key's bound chain (or is not a supported network) |
-| `invalid_extra` | 400 | `extra.name` or `extra.version` mismatch |
-| `invalid_asset` | 400 | `asset` is not the JPYC contract |
-| `invalid_address` | 400 | `from` or `to` is not a valid address |
-| `invalid_pay_to` | 400 | `payTo` or `authorization.to` does not match the API key's bound recipient |
-| `invalid_amount` | 400 | `value` < `amount`, or either is zero/non-positive |
-| `invalid_nonce_format` | 400 | `nonce` is not a 32-byte hex string |
-| `authorization_expired` | 400 | `validBefore` ≤ now |
-| `authorization_not_yet_valid` | 400 | `validAfter` > now |
-| `invalid_signature` | 400 | EIP-712 signature does not recover to `from`, or signature length is wrong |
-| `nonce_already_used` | 400 | `authorizationState(from, nonce)` returned true on-chain |
-| `simulation_failed` | 400 | `simulateContract` or `estimateContractGas` reverted |
-| `simulation_timeout` | 503 | On-chain simulation exceeded 3 seconds |
-| `facilitator_insufficient_native_balance` | 503 | Facilitator MATIC balance below estimated gas cost |
-| `rpc_unavailable` | 503 | RPC error reading authorizationState, balance, or gas price |
+| `code` (yen402) | `invalidReason` / `errorReason` (x402) | HTTP | Meaning |
+|---|---|---|---|
+| `invalid_request` | `invalid_payload` | 400 | Malformed JSON or missing required fields |
+| `invalid_x402_version` | `invalid_x402_version` | 400 | `x402Version` not in {1, 2} |
+| `invalid_scheme` | `invalid_exact_evm_scheme` | 400 | `scheme` is not `"exact"` |
+| `invalid_chain_id` | `invalid_exact_evm_network_mismatch` | 400 | payload and requirements `network` disagree with the chain |
+| `invalid_network` / `network_not_offered` | `invalid_network` | 400 | network not supported / not sponsored on this instance |
+| `invalid_extra` | `invalid_exact_evm_missing_eip712_domain` | 400 | `extra.name` or `extra.version` mismatch |
+| `invalid_asset` | `invalid_payment_requirements` | 400 | `asset` is not the JPYC contract |
+| `invalid_pay_to` | `invalid_payment_requirements` | 400 | `payTo` missing or not an address |
+| `recipient_mismatch` | `invalid_exact_evm_recipient_mismatch` | 400 | signed `authorization.to` ≠ `payTo` |
+| `invalid_address` | `invalid_payload` | 400 | `from` or `to` is not a valid address |
+| `invalid_amount` | `invalid_exact_evm_authorization_value` | 400 | `value` or `amount` zero/non-positive/malformed |
+| `amount_mismatch` | `invalid_exact_evm_payload_authorization_value_mismatch` | 400 | `value` ≠ `amount` |
+| `amount_below_minimum` | `amount_below_minimum` | 400 | below this instance's sponsored-gas floor (`MIN_SETTLE_JPYC`); no standard equivalent |
+| `invalid_nonce_format` | `invalid_payload` | 400 | `nonce` is not a 32-byte hex string |
+| `authorization_expired` | `invalid_exact_evm_payload_authorization_valid_before` | 400 | `validBefore` < now + 6 s |
+| `authorization_not_yet_valid` | `invalid_exact_evm_payload_authorization_valid_after` | 400 | `validAfter` > now |
+| `invalid_signature` | `invalid_exact_evm_signature` | 400 | signature does not recover to `from`, or is malformed |
+| `non_canonical_signature` | `invalid_exact_evm_non_canonical_signature` | 400 | high-s signature from a payer with no code |
+| `nonce_already_used` | `invalid_exact_evm_nonce_already_used` | 400 | `authorizationState(from, nonce)` is true, or nonce already claimed |
+| `insufficient_funds` | `invalid_exact_evm_insufficient_balance` | 400 | simulation reverted and payer JPYC balance < `value` |
+| `simulation_failed` | `invalid_exact_evm_transaction_simulation_failed` | 400 | `simulateContract` or `estimateContractGas` reverted |
+| `transaction_failed` / `transaction_reverted` | `invalid_exact_evm_transaction_failed` | 500 / 400 | broadcast failed / confirmed revert |
+| `settlement_pending` | `settlement_pending` | 202 | broadcast, not confirmed in time — reconcile with `transaction` |
+| `simulation_timeout`, `rpc_unavailable`, `facilitator_insufficient_native_balance` | `unexpected_verify_error` | 503 | our side, not the payment |
+| `rate_limited`, `budget_exhausted`, `service_unavailable`, `insufficient_facilitator_gas` | `unexpected_settle_error` (verify: `unexpected_verify_error`) | 429 / 503 | our side, not the payment |
 
 ## Compatibility with x402 v2 canonical wire format
 
@@ -347,8 +353,8 @@ This facilitator targets the v2 specification at `github.com/x402-foundation/x40
 | Request top-level `x402Version` | required | optional, but if present must match inner | accepts both v1-style and v2-style envelopes |
 | `/settle` success tx field | `transaction` | both `transaction` and `txHash` | `txHash` deprecated; remove in next major |
 | `/settle` success `payer` | required | included | matches |
-| `/verify` failure `invalidReason` | required (string) | included alongside legacy `code` | `code` deprecated; remove in next major |
-| `/settle` failure `errorReason` | required (string) | included alongside legacy `code` | `code` deprecated; remove in next major |
+| `/verify` failure `invalidReason` | required (string) | x402 reason (SDK/spec §9), plus `invalidMessage`; yen402's own `code` alongside | `code` kept for existing callers |
+| `/settle` failure `errorReason` | required (string) | x402 reason (SDK/spec §9), plus `errorMessage`; yen402's own `code` alongside | `code` kept for existing callers |
 | `payTo` dynamic per-request | supported by spec | rejected if not matching API key's bound recipient | intentional security choice — see "Authentication" |
 | `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE` headers | resource-server flow only | not applicable to facilitator HTTP API | n/a |
 

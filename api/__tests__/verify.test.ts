@@ -57,6 +57,7 @@ const mockPublicClient = {
   estimateContractGas: vi.fn(),
   getBalance: vi.fn(),
   getGasPrice: vi.fn(),
+  getCode: vi.fn(),
 };
 
 // Stub env before importing handler
@@ -84,7 +85,7 @@ const validAuth = {
 };
 
 // Last byte 0x1c (v=28) so viem.parseSignature accepts it during simulate.
-const validSignature = "0x" + "bb".repeat(64) + "1c";
+const validSignature = "0x" + "bb".repeat(32) + "11".repeat(32) + "1c";
 
 const validBody = {
   paymentPayload: {
@@ -235,7 +236,10 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(res.status).toBe(400);
     const data: any = await res.json();
     expect(data.isValid).toBe(false);
-    expect(data.invalidReason).toBe("authorization_expired");
+    expect(data.invalidReason).toBe(
+      "invalid_exact_evm_payload_authorization_valid_before",
+    );
+    expect(data.invalidMessage).toBeTypeOf("string");
     // legacy field preserved
     expect(data.code).toBe("authorization_expired");
   });
@@ -292,7 +296,7 @@ describe("POST /api/verify (EIP-3009)", () => {
     expect(data.error).toContain("Signature");
     // v2 canonical: error responses now include isValid:false
     expect(data.isValid).toBe(false);
-    expect(data.invalidReason).toBe("invalid_signature");
+    expect(data.invalidReason).toBe("invalid_exact_evm_signature");
   });
 
   describe("open facilitator — what replaced the API key", () => {
@@ -316,7 +320,7 @@ describe("POST /api/verify (EIP-3009)", () => {
       const res = await handler(makeRequest({ body }));
       expect(res.status).toBe(400);
       const data: any = await res.json();
-      expect(data.invalidReason).toBe("invalid_pay_to");
+      expect(data.invalidReason).toBe("invalid_exact_evm_recipient_mismatch");
     });
   });
 });
